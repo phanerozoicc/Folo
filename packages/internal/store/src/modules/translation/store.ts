@@ -232,7 +232,7 @@ class TranslationSyncService {
   }) {
     const userRole = useUserStore.getState().role
 
-    if (userRole === UserRole.Free) return null
+    if (userRole === UserRole.Free && !planGateOverride.isBypassed()) return null
     const translationMode = mode ?? "bilingual"
     await this.ensureMode(translationMode)
 
@@ -264,3 +264,14 @@ class TranslationSyncService {
 }
 
 export const translationSyncService = new TranslationSyncService()
+
+/**
+ * Escape hatch for client-provided AI backends: when a client generates
+ * translations on its own (e.g. a device-local model), the free-plan gate
+ * must not block them. Hosts may inject an override; default keeps the
+ * original plan gate untouched.
+ */
+const planGateOverride = { isBypassed: () => false }
+export const setTranslationPlanGateBypass = (isBypassed: () => boolean) => {
+  planGateOverride.isBypassed = isBypassed
+}

@@ -7,6 +7,7 @@ import { createDefineSettingItem } from "../helper/builder"
 import { createSettingBuilder } from "../helper/setting-builder"
 import { ByokSection } from "./ai/byok"
 import { MCPServicesSection } from "./ai/mcp/MCPServicesSection"
+import { OwnAiSection } from "./ai/OwnAiSection"
 import { PanelStyleSection } from "./ai/PanelStyleSection"
 import { PersonalizePromptSection } from "./ai/PersonalizePromptSection"
 import { AIShortcutsSection } from "./ai/shortcuts/AIShortcutsSection"
@@ -75,6 +76,12 @@ export const SettingAI = () => {
             value: t("byok.title"),
           },
           ByokSection,
+
+          {
+            type: "title",
+            value: t("own_ai.title"),
+          },
+          OwnAiSection,
 
           {
             type: "title",

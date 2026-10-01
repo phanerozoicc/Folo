@@ -177,6 +177,14 @@ export const defaultAISettings: AISettings = {
     enabled: false,
     providers: [],
   },
+
+  // Client-side AI backend (device-local, never synced)
+  ownAi: {
+    enabled: false,
+    baseURL: "",
+    apiKey: "",
+    model: "",
+  },
 }
 
 export const defaultSettings = {

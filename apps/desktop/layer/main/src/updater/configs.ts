@@ -8,7 +8,8 @@ export const appUpdaterConfig = {
   enableCoreUpdate: !isStoreDistribution,
 
   // Disable app update will also disable renderer hot update and core update
-  enableAppUpdate: true,
+  // Fork build: keep OTA off so the custom-ai changes are never overwritten by official updates.
+  enableAppUpdate: false,
   enableDistributionStoreUpdate: isStoreDistribution,
 
   app: {

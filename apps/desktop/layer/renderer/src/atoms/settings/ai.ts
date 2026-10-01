@@ -126,7 +126,21 @@ export const {
   settingAtom: __aiSettingAtom,
 } = createSettingAtom("ai", createDefaultSettings)
 /** Device-local AI settings: every other AI setting syncs to the account. */
-export const aiLocalOnlyKeys: (keyof AISettings)[] = []
+export const aiLocalOnlyKeys: (keyof AISettings)[] = ["ownAi"]
+
+////////// Own AI (client-side OpenAI-compatible backend, device-local)
+const defaultOwnAI: AISettings["ownAi"] = {
+  enabled: false,
+  baseURL: "",
+  apiKey: "",
+  model: "",
+}
+export const useOwnAIEnabled = () => (useAISettingKey("ownAi") ?? defaultOwnAI).enabled
+export const getOwnAISettings = () => getAISettings().ownAi ?? defaultOwnAI
+const isOwnAIConfigured = (ownAi: AISettings["ownAi"] | undefined) =>
+  !!ownAi?.enabled && !!ownAi.baseURL && !!ownAi.model
+export const isOwnAIEnabled = () => isOwnAIConfigured(getAISettings().ownAi)
+export const useOwnAIActive = () => isOwnAIConfigured(useAISettingKey("ownAi"))
 
 export const syncServerShortcuts = (
   serverShortcuts: readonly ServerShortcutConfig[] | null | undefined,

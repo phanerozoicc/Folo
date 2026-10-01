@@ -5,6 +5,7 @@ import { useUserRole } from "@follow/store/user/hooks"
 import type { FC } from "react"
 import { memo } from "react"
 
+import { useOwnAIActive } from "~/atoms/settings/ai"
 import { useActionLanguage, useGeneralSettingKey } from "~/atoms/settings/general"
 
 import { getItemComponentByView } from "./Items/getItemComponentByView"
@@ -27,7 +28,8 @@ const EntryItemImpl = memo(function EntryItemImpl({
   const translationMode = useGeneralSettingKey("translationMode")
   const actionLanguage = useActionLanguage()
   const userRole = useUserRole()
-  const shouldPrefetchTranslation = enableTranslation && !isFreeRole(userRole)
+  const ownAiActive = useOwnAIActive()
+  const shouldPrefetchTranslation = enableTranslation && (!isFreeRole(userRole) || ownAiActive)
   const translation = useEntryTranslation({
     entryId,
     language: actionLanguage,

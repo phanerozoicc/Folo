@@ -220,6 +220,17 @@ export interface AISettings {
   autoScrollWhenStreaming: boolean
 
   byok: UserByokSettings
+
+  // Client-side AI backend: entry summary and translation are generated directly
+  // from this device via an OpenAI-compatible endpoint, never touching the server.
+  ownAi: OwnAISettings
+}
+
+export type OwnAISettings = {
+  enabled: boolean
+  baseURL: string
+  apiKey: string
+  model: string
 }
 
 export type ByokProviderName = "openai" | "google" | "vercel-ai-gateway" | "openrouter"

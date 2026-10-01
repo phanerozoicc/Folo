@@ -8,6 +8,7 @@ import { DebugService } from "./services/debug"
 import { DockService } from "./services/dock"
 import { IntegrationService } from "./services/integration"
 import { MenuService } from "./services/menu"
+import { OwnAiService } from "./services/own-ai"
 import { ReaderService } from "./services/reader"
 import { SettingService } from "./services/setting"
 
@@ -19,6 +20,7 @@ const services = createServices([
   DebugService,
   DockService,
   MenuService,
+  OwnAiService,
   ReaderService,
   SettingService,
   IntegrationService,

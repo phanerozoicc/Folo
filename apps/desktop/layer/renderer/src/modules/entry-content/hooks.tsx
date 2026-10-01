@@ -9,6 +9,7 @@ import { toast } from "sonner"
 
 import { useShowAITranslation } from "~/atoms/ai-translation"
 import { useEntryIsInReadability, useEntryIsInReadabilitySuccess } from "~/atoms/readability"
+import { useOwnAIActive } from "~/atoms/settings/ai"
 import { useActionLanguage, useGeneralSettingKey } from "~/atoms/settings/general"
 import { useModalStack } from "~/components/ui/modal/stacked/hooks"
 
@@ -50,7 +51,8 @@ export const useEntryContent = (entryId: string) => {
 
   const enableTranslation = useShowAITranslation()
   const userRole = useUserRole()
-  const shouldPrefetchTranslation = enableTranslation && !isFreeRole(userRole)
+  const ownAiActive = useOwnAIActive()
+  const shouldPrefetchTranslation = enableTranslation && (!isFreeRole(userRole) || ownAiActive)
   const actionLanguage = useActionLanguage()
   const translationMode = useGeneralSettingKey("translationMode")
   const contentTranslated = useEntryTranslation({

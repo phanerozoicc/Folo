@@ -13,6 +13,7 @@ import { setLoginModalShow } from "~/atoms/user"
 
 import { ipcServices } from "./client"
 import { getAuthSessionToken, getClientId, getSessionId } from "./client-session"
+import { patchFollowApiWithOwnAI } from "./own-ai"
 
 const isElectronRuntime = () => {
   return IN_ELECTRON || (typeof window !== "undefined" && !!window.electron)
@@ -78,6 +79,10 @@ export const followClient = new FollowClient({
 })
 
 export const followApi = followClient.api
+
+// Device-local AI backend: route entry summary & translation to the user's own
+// OpenAI-compatible endpoint when enabled (see Settings → AI → Own AI).
+patchFollowApiWithOwnAI(followApi)
 
 followClient.addRequestInterceptor(async (ctx) => {
   const { options } = ctx
