@@ -5,6 +5,7 @@ import { setTranslationPlanGateBypass } from "@follow/store/translation/store"
 import { getOwnAISettings, isOwnAIEnabled } from "~/atoms/settings/ai"
 
 import { ipcServices } from "./client"
+import { patchOwnAIFeatures } from "./own-ai-features"
 
 // Own AI generates translations on this device, so the free-plan gate must not block them.
 setTranslationPlanGateBypass(() => isOwnAIEnabled())
@@ -207,4 +208,8 @@ export function patchFollowApiWithOwnAI(api: { ai: Record<string, unknown> }) {
     }
     return translateBatchWithOwnAI(input)
   }
+
+  patchOwnAIFeatures(
+    api as unknown as { entries: Record<string, unknown>; aiTask: Record<string, unknown> },
+  )
 }
