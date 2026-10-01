@@ -1,0 +1,168 @@
+name: 🛠️ Build Desktop (Fork)
+
+# Fork-friendly desktop build: no signing certificates, no third-party secrets.
+# - macOS: packaged, ad-hoc signed (--deep), then distributables are made with --skip-package
+#   so the zip/dmg contain a validly signed app (forge's default signing path leaves the
+#   bundle in a state macOS refuses to launch: "code has no resources but signature
+#   indicates they must be present").
+# - Linux: AppImage + deb via the repo's forge makers.
+# Artifacts are always uploaded; pushing a `v*` tag additionally publishes a GitHub Release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - custom-ai
+    tags:
+      - "v*"
+    paths:
+      - "apps/desktop/**"
+      - "packages/**"
+      - "locales/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/build-desktop-fork.yml"
+
+concurrency:
+  group: build-desktop-fork-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max-old-space-size=8192
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+          - os: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install python-setuptools
+          pnpm add -g appdmg
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg
+
+      - name: Install dependencies
+        run: pnpm i
+
+      - name: Update main hash
+        working-directory: apps/desktop
+        run: pnpm update:main-hash
+
+      - name: Build - Vite
+        working-directory: apps/desktop
+        run: pnpm build:electron-vite
+
+      - name: Build - macOS (package, ad-hoc sign, then make)
+        if: runner.os == 'macOS'
+        env:
+          OSX_SIGN_IDENTITY: "-"
+        run: |
+          cd apps/desktop
+          for arch in arm64 x64; do
+            npx electron-forge package --platform=darwin --arch=$arch
+            codesign --force --deep --sign - "out/Folo-darwin-$arch/Folo.app"
+            codesign --verify --deep --strict "out/Folo-darwin-$arch/Folo.app"
+            npx electron-forge make --skip-package --platform=darwin --arch=$arch
+          done
+
+      - name: Build - Linux
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: pnpm build:electron-forge
+
+      - name: Upload artifact (macos-arm64)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-arm64
+          path: |
+            apps/desktop/out/make/**/*arm64.dmg
+            apps/desktop/out/make/**/*arm64.zip
+            apps/desktop/out/make/**/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload artifact (macos-x64)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-x64
+          path: |
+            apps/desktop/out/make/**/*x64.dmg
+            apps/desktop/out/make/**/*x64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload artifact (linux-x64)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-linux-x64
+          path: |
+            apps/desktop/out/make/**/*.AppImage
+            apps/desktop/out/make/**/*.deb
+            apps/desktop/out/make/**/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/**
+          draft: false
+          prerelease: false
+          body: |
+            Folo fork build (custom-ai branch) with device-local Own AI.
+
+            - macOS: download the dmg for your architecture. Ad-hoc signed — after
+              first launch is blocked, right-click the app and choose Open, or run
+              `xattr -cr /Applications/Folo.app`. Auto-update is disabled.
+            - Linux: AppImage or deb, x64.
