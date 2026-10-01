@@ -48,9 +48,11 @@ export const PAID_SETTINGS = {
 export type SettingNamespace = keyof typeof PAID_SETTINGS
 
 export const getSettingPaidLevel = (namespace: string, key: string) => {
-  const group = PAID_SETTINGS[namespace as keyof typeof PAID_SETTINGS]
-  if (!group) return
-  return group[key as keyof typeof group]
+  // Fork: no setting is plan-locked client-side. PAID_SETTINGS is kept for reference
+  // only; server-enforced limits (quotas, AI chat, private feeds) are unaffected.
+  void namespace
+  void key
+  return undefined
 }
 
 const ACCENT_COLOR_MAP = {

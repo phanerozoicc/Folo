@@ -1,5 +1,5 @@
 import { isMobile } from "@follow/components/hooks/useMobile.js"
-import { FeedViewType, getView, UserRole } from "@follow/constants"
+import { FeedViewType, getView } from "@follow/constants"
 import { IN_ELECTRON } from "@follow/shared/constants"
 import { useIsEntryStarred } from "@follow/store/collection/hooks"
 import { isOnboardingEntryUrl } from "@follow/store/constants/onboarding"
@@ -377,7 +377,6 @@ export const useEntryActions = ({ entryId, view }: { entryId: string; view: Feed
             view,
           ),
         active: isShowAITranslationOnce,
-        disabled: userRole === UserRole.Free || userRole === UserRole.Trial,
         entryId,
       }),
       new EntryActionMenuItem({
