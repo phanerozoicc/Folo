@@ -209,7 +209,71 @@ export function patchFollowApiWithOwnAI(api: { ai: Record<string, unknown> }) {
     return translateBatchWithOwnAI(input)
   }
 
+  const originalConfig = ai.config as () => Promise<OwnAiConfigResponse>
+  ai.config = async (): Promise<OwnAiConfigResponse> => {
+    if (!isOwnAIEnabled() || !isElectronRuntime()) {
+      return originalConfig.call(ai)
+    }
+
+    const ownAi = getOwnAISettings()
+    try {
+      const res = await originalConfig.call(ai)
+      if (res?.data) {
+        applyOwnAIModelConfig(res.data, ownAi.model)
+        return res
+      }
+    } catch (error) {
+      console.warn("[own-ai] official ai config unavailable, using offline fallback:", error)
+    }
+
+    return {
+      code: 0,
+      data: {
+        defaultModel: ownAi.model,
+        availableModels: [ownAi.model],
+        availableModelsMenu: [{ label: ownAi.model, value: ownAi.model }],
+        rateLimit: {
+          maxTokens: Number.POSITIVE_INFINITY,
+          currentTokens: 0,
+          remainingTokens: Number.POSITIVE_INFINITY,
+          windowDuration: 86_400_000,
+          windowResetTime: Date.now() + 86_400_000,
+        },
+        attachmentLimits: {
+          maxFiles: 0,
+          remainingFiles: 0,
+          windowDuration: 86_400_000,
+          windowResetTime: Date.now() + 86_400_000,
+        },
+        usage: { total: 0, used: 0, remaining: 0, resetAt: new Date() },
+        freeQuota: {
+          shouldCheckDailyLimit: false,
+          remainingRequests: 0,
+          remainingMonthlyRequests: 0,
+          role: "own-ai",
+          dailyLimit: 0,
+          monthlyLimit: 0,
+        },
+      },
+    }
+  }
+
   patchOwnAIFeatures(
     api as unknown as { entries: Record<string, unknown>; aiTask: Record<string, unknown> },
   )
+}
+
+interface OwnAiConfigResponse {
+  code: number
+  data: {
+    defaultModel: string
+    availableModels: string[]
+    availableModelsMenu: { label: string; value?: string; paidLevel?: string }[]
+  } & Record<string, unknown>
+}
+
+function applyOwnAIModelConfig(data: OwnAiConfigResponse["data"], model: string) {
+  data.defaultModel = model
+  data.availableModels = [model]
+  data.availableModelsMenu = [{ label: model, value: model }]
 }

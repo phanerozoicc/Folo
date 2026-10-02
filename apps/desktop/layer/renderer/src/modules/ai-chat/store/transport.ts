@@ -2,8 +2,11 @@ import { env } from "@follow/shared/env.desktop"
 import type { HttpChatTransportInitOptions, UIMessageChunk } from "ai"
 import { HttpChatTransport, parseJsonEventStream, uiMessageChunkSchema } from "ai"
 
+import { isOwnAIRuntime } from "~/lib/own-ai-features"
+
 import { getAIModelState } from "../atoms/session"
 import { AIPersistService } from "../services"
+import { OwnAiChatTransport } from "./own-ai-transport"
 import type { BizUIMessage } from "./types"
 
 type TitleHandlerPersistOption = boolean | ((title: string) => void | Promise<void>)
@@ -45,6 +48,11 @@ export function createChatTitleHandler(
  * This is used by the AbstractChat instance to communicate with AI providers
  */
 export function createChatTransport({ onValue, titleHandler }: CreateChatTransportOptions = {}) {
+  // Own AI: chat directly with the user's own OpenAI-compatible endpoint
+  if (isOwnAIRuntime()) {
+    return new OwnAiChatTransport({ onValue, titleHandler })
+  }
+
   return new ExtendChatTransport({
     onValue,
     titleHandler,

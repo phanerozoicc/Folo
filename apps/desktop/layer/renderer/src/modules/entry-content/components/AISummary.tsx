@@ -9,6 +9,7 @@ import {
   setAIPanelVisibility,
   useAIChatPanelStyle,
   useAIPanelVisibility,
+  useOwnAIActive,
 } from "~/atoms/settings/ai"
 import { useActionLanguage } from "~/atoms/settings/general"
 import { AISummaryCardBase } from "~/components/ui/ai-summary-card"
@@ -18,6 +19,7 @@ export function AISummary({ entryId }: { entryId: string }) {
   const summarySetting = useEntry(entryId, (state) => state.settings?.summary)
   const isInReadabilitySuccess = useEntryIsInReadabilitySuccess(entryId)
   const showAISummary = useShowAISummary(summarySetting)
+  const ownAiActive = useOwnAIActive()
 
   const actionLanguage = useActionLanguage()
 
@@ -52,7 +54,9 @@ export function AISummary({ entryId }: { entryId: string }) {
       content={summary.data}
       isLoading={summary.isLoading}
       className="my-8"
-      title={t("entry_content.ai_summary")}
+      title={
+        ownAiActive ? `${t("entry_content.ai_summary")} · Own AI` : t("entry_content.ai_summary")
+      }
       showAskAIButton={shouldShowAskAI}
       onAskAI={handleAskAI}
       error={summary.error}
