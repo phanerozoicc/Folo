@@ -13,11 +13,18 @@ export const useAIModel = () => {
 
     const { selectedModel } = modelState
     const { defaultModel, availableModels = [] } = configuration
+    const fallback = defaultModel || null
 
-    // If no model is selected or selected model is not available, use default
-    if (!selectedModel || !availableModels.includes(selectedModel)) {
+    // If no model is selected or selected model is not available, use default.
+    // Writing the same value must be skipped: modelState is a fresh object per
+    // write, so an unconditional write here loops forever when defaultModel is
+    // undefined (which renders every consumer on each pass).
+    if (
+      (!selectedModel || !availableModels.includes(selectedModel)) &&
+      fallback !== selectedModel
+    ) {
       setAIModelState({
-        selectedModel: defaultModel || null,
+        selectedModel: fallback,
       })
     }
   }, [configuration, isLoading, modelState])

@@ -484,36 +484,36 @@ const jsonOk = (payload: unknown) =>
 
 const ownAIModelConfig = () => {
   const model = getOwnAISettings().model
-  return {
-    code: 0,
-    data: {
-      defaultModel: model,
-      availableModels: [model],
-      availableModelsMenu: [{ label: model, value: model }],
-      rateLimit: {
-        maxTokens: Number.POSITIVE_INFINITY,
-        currentTokens: 0,
-        remainingTokens: Number.POSITIVE_INFINITY,
-        windowDuration: 86_400_000,
-        windowResetTime: Date.now() + 86_400_000,
-      },
-      attachmentLimits: {
-        maxFiles: 5,
-        remainingFiles: 5,
-        windowDuration: 86_400_000,
-        windowResetTime: Date.now() + 86_400_000,
-      },
-      usage: { total: 0, used: 0, remaining: 0, resetAt: new Date().toISOString() },
-      freeQuota: {
-        shouldCheckDailyLimit: false,
-        remainingRequests: 0,
-        remainingMonthlyRequests: 0,
-        role: "own-ai",
-        dailyLimit: 0,
-        monthlyLimit: 0,
-      },
+  const data = {
+    defaultModel: model,
+    availableModels: [model],
+    availableModelsMenu: [{ label: model, value: model }],
+    rateLimit: {
+      maxTokens: Number.POSITIVE_INFINITY,
+      currentTokens: 0,
+      remainingTokens: Number.POSITIVE_INFINITY,
+      windowDuration: 86_400_000,
+      windowResetTime: Date.now() + 86_400_000,
+    },
+    attachmentLimits: {
+      maxFiles: 5,
+      remainingFiles: 5,
+      windowDuration: 86_400_000,
+      windowResetTime: Date.now() + 86_400_000,
+    },
+    usage: { total: 0, used: 0, remaining: 0, resetAt: new Date().toISOString() },
+    freeQuota: {
+      shouldCheckDailyLimit: false,
+      remainingRequests: 0,
+      remainingMonthlyRequests: 0,
+      role: "own-ai",
+      dailyLimit: 0,
+      monthlyLimit: 0,
     },
   }
+  // The SDK returns the JSON body as-is (no data unwrapping); some consumers
+  // destructure top-level fields instead of `.data`, so expose both shapes.
+  return { code: 0, data, ...data }
 }
 
 const entriesAiSortPath = (url: URL) => {
