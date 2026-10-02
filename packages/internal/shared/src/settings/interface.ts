@@ -231,6 +231,8 @@ export type OwnAISettings = {
   baseURL: string
   apiKey: string
   model: string
+  /** Optional faster/cheaper model for high-volume features (summary, translation, sort, titles). */
+  fastModel: string
 }
 
 export type ByokProviderName = "openai" | "google" | "vercel-ai-gateway" | "openrouter"

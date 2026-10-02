@@ -272,6 +272,8 @@
   "own_ai.base_url_description": "OpenAI 兼容的 Base URL，例如 https://open.bigmodel.cn/api/paas/v4，会自动拼接 /chat/completions。",
   "own_ai.enabled": "启用自有 AI",
   "own_ai.enabled_description": "用你自己的 OpenAI 兼容接口在本机直接生成文章摘要和翻译，请求不经过 Folo 服务器，也不消耗套餐额度。",
+  "own_ai.fast_model_description": "供摘要、翻译、时间线排序、对话标题等高频调用使用的更快的模型；留空则全部使用主模型。",
+  "own_ai.fast_model_placeholder": "例如 glm-4.5-flash、gpt-4o-mini（可选）",
   "own_ai.model_description": "模型名称，例如 glm-4.7-flash",
   "own_ai.test.button": "测试连接",
   "own_ai.test.failed": "连接失败：{{error}}",

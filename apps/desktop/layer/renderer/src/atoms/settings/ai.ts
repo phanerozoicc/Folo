@@ -134,6 +134,7 @@ const defaultOwnAI: AISettings["ownAi"] = {
   baseURL: "",
   apiKey: "",
   model: "",
+  fastModel: "",
 }
 export const useOwnAIEnabled = () => (useAISettingKey("ownAi") ?? defaultOwnAI).enabled
 export const getOwnAISettings = () => getAISettings().ownAi ?? defaultOwnAI

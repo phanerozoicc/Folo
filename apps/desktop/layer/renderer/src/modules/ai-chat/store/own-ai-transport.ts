@@ -246,7 +246,7 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
       const { content } = await service.chatCompletion({
         apiKey: ownAi.apiKey,
         baseURL: ownAi.baseURL,
-        model: ownAi.model,
+        model: ownAi.fastModel?.trim() || ownAi.model,
         system:
           "Generate a concise chat title (max 20 characters) in the language of the text. Output ONLY the title.",
         prompt: firstUserText,

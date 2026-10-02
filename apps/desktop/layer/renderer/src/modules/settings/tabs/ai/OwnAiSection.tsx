@@ -11,7 +11,13 @@ import { SettingDescription, SettingSwitch } from "../../control"
 export const OwnAiSection = () => {
   const { t } = useTranslation("ai")
   const aiSettings = useAISettingValue()
-  const ownAi = aiSettings.ownAi ?? { enabled: false, baseURL: "", apiKey: "", model: "" }
+  const ownAi = aiSettings.ownAi ?? {
+    enabled: false,
+    baseURL: "",
+    apiKey: "",
+    model: "",
+    fastModel: "",
+  }
 
   const update = (patch: Partial<typeof ownAi>) => {
     setAISetting("ownAi", { ...ownAi, ...patch })
@@ -69,6 +75,15 @@ export const OwnAiSection = () => {
               placeholder="gpt-4o-mini"
             />
             <SettingDescription>{t("own_ai.model_description")}</SettingDescription>
+          </div>
+
+          <div className="space-y-1.5">
+            <Input
+              value={ownAi.fastModel ?? ""}
+              onChange={(e) => update({ fastModel: e.target.value })}
+              placeholder={t("own_ai.fast_model_placeholder")}
+            />
+            <SettingDescription>{t("own_ai.fast_model_description")}</SettingDescription>
           </div>
 
           <div className="space-y-1.5">

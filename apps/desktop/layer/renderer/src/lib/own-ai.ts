@@ -1,14 +1,23 @@
 import { ACTION_LANGUAGE_MAP } from "@follow/shared/language"
 import { getEntry } from "@follow/store/entry/getter"
 import { setTranslationPlanGateBypass } from "@follow/store/translation/store"
+import { atom } from "jotai"
 
 import { getAISettings, getOwnAISettings, isOwnAIEnabled } from "~/atoms/settings/ai"
+import { jotaiStore } from "~/lib/jotai"
 
 import { ipcServices } from "./client"
 import { handleAiTaskRequest, startOwnAITaskScheduler } from "./own-ai-tasks"
 
 // Own AI generates translations on this device, so the free-plan gate must not block them.
 setTranslationPlanGateBypass(() => isOwnAIEnabled())
+
+/**
+ * Partially generated summaries keyed by entryId, updated while the summary
+ * streams in. The AI summary card renders these so text appears progressively
+ * instead of after the full completion.
+ */
+export const ownAISummaryStreamAtom = atom<Record<string, string>>({})
 
 export const isOwnAIRuntime = () =>
   isOwnAIEnabled() && typeof window !== "undefined" && !!(window as { electron?: unknown }).electron
@@ -27,16 +36,20 @@ export const chatCompletion = async (input: {
   system: string
   prompt: string
   temperature?: number
+  /** Use the configured fast model for high-volume, low-complexity tasks. */
+  preferFast?: boolean
 }) => {
   const ownAi = getOwnAISettings()
   const service = ipcServices?.ownAi
   if (!service) {
     throw new Error("OwnAI is only available in the desktop app")
   }
+  const fastModel = ownAi.fastModel?.trim()
+  const model = (input.preferFast && fastModel) || ownAi.model
   const { content } = await service.chatCompletion({
     apiKey: ownAi.apiKey,
     baseURL: ownAi.baseURL,
-    model: ownAi.model,
+    model,
     system: input.system,
     prompt: input.prompt,
     temperature: input.temperature,
@@ -50,11 +63,11 @@ export const chatCompletion = async (input: {
 
 const MAX_SUMMARY_CHARS = 24_000
 
-const summarizeEntry = async (input: {
+const buildSummaryRequest = (input: {
   id: string
   language: string
   target: "content" | "readabilityContent"
-}): Promise<string> => {
+}): { system: string; prompt: string } | null => {
   const entry = getEntry(input.id) as Record<string, unknown> | null
   const rawSource =
     input.target === "readabilityContent"
@@ -62,16 +75,107 @@ const summarizeEntry = async (input: {
       : entry?.content
   const text = stripHtml((rawSource as string) ?? "", MAX_SUMMARY_CHARS)
 
-  if (!text) return ""
+  if (!text) return null
+  const lang = languageLabel(input.language)
 
-  return (
-    await chatCompletion({
-      temperature: 0.5,
-      system:
-        "You are a professional reading assistant. Summarize articles faithfully without adding commentary, advice or promotional tone.",
-      prompt: `Summarize the following article in ${languageLabel(input.language)}. Keep the summary concise (3-6 sentences), cover the key points, and write it directly in ${languageLabel(input.language)}. Return ONLY the summary text.\n\n<article>\n${text}\n</article>`,
-    })
-  ).trim()
+  return {
+    system:
+      "You are a professional reading assistant. Summarize articles faithfully without adding commentary, advice or promotional tone.",
+    prompt: `Summarize the following article in ${lang}. Keep the summary concise (3-6 sentences), cover the key points, and write it directly in ${lang}. Return ONLY the summary text.\n\n<article>\n${text}\n</article>`,
+  }
+}
+
+type IpcEventTarget = {
+  on: (channel: string, listener: (...args: unknown[]) => void) => void
+  removeListener: (channel: string, listener: (...args: unknown[]) => void) => void
+}
+
+const getIpcEventTarget = (): IpcEventTarget | null => {
+  if (typeof window === "undefined") return null
+  const ipc = (window as { electron?: { ipcRenderer?: unknown } }).electron?.ipcRenderer as
+    IpcEventTarget | undefined
+  return ipc ?? null
+}
+
+const STREAM_EVENT = "own-ai:stream"
+const STREAM_DONE_EVENT = "own-ai:stream-done"
+
+/**
+ * Streaming chat completion. Deltas arrive via webContents events (the same
+ * channel the AI chat transport uses, keyed by requestId) so consumers can
+ * render partial output while the model is still generating.
+ */
+const chatCompletionStreaming = async (input: {
+  system: string
+  prompt: string
+  temperature?: number
+  preferFast?: boolean
+  onDelta?: (fullText: string) => void
+}): Promise<string> => {
+  const ownAi = getOwnAISettings()
+  const service = ipcServices?.ownAi
+  const ipc = getIpcEventTarget()
+  if (!service || !ipc) {
+    // Fall back to the non-streaming path.
+    const content = await chatCompletion(input)
+    input.onDelta?.(content)
+    return content
+  }
+
+  const fastModel = ownAi.fastModel?.trim()
+  const model = (input.preferFast && fastModel) || ownAi.model
+  const requestId = `own-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  return new Promise<string>((resolve, reject) => {
+    let content = ""
+    let settled = false
+
+    const onDelta = (...args: unknown[]) => {
+      const [eventRequestId, delta] = args as [string, string]
+      if (eventRequestId !== requestId) return
+      if (typeof delta === "string" && delta) {
+        content += delta
+        input.onDelta?.(content)
+      }
+    }
+
+    const cleanup = () => {
+      try {
+        ipc.removeListener(STREAM_EVENT, onDelta)
+        ipc.removeListener(STREAM_DONE_EVENT, onDone)
+      } catch {
+        // webContents gone
+      }
+    }
+
+    const onDone = (...args: unknown[]) => {
+      const [eventRequestId, errorMessage] = args as [string, string | null]
+      if (eventRequestId !== requestId || settled) return
+      settled = true
+      cleanup()
+      if (errorMessage) reject(new Error(errorMessage))
+      else resolve(content)
+    }
+
+    ipc.on(STREAM_EVENT, onDelta)
+    ipc.on(STREAM_DONE_EVENT, onDone)
+
+    service
+      .chatCompletionStream({
+        apiKey: ownAi.apiKey,
+        baseURL: ownAi.baseURL,
+        model,
+        messages: [
+          { role: "system", content: input.system },
+          { role: "user", content: input.prompt },
+        ],
+        ...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
+        requestId,
+      })
+      .catch(() => {
+        // failures also arrive via the done event
+      })
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +191,7 @@ interface OwnAiTranslationBatchBody {
 
 const MAX_TRANSLATION_CHARS = 60_000
 const TRANSLATION_CHUNK_CHARS = 8_000
-const TRANSLATION_CONCURRENCY = 4
+const TRANSLATION_CONCURRENCY = 6
 
 const splitForTranslation = (text: string) => {
   if (text.length <= TRANSLATION_CHUNK_CHARS) return [text]
@@ -120,7 +224,7 @@ const translateText = async (text: string, lang: string, preserveHtml: boolean) 
       ? `The content is HTML. Translate only the human-readable text; keep every HTML tag, attribute, URL, code block and media element exactly as-is.`
       : `Translate the text as-is.`
     const prompt = `Translate the following content into ${lang}. ${requirement}\n\n<content>\n${chunk}\n</content>`
-    const content = await chatCompletion({ temperature: 0.2, system, prompt })
+    const content = await chatCompletion({ temperature: 0.2, system, prompt, preferFast: true })
     results.push(
       content
         .trim()
@@ -159,6 +263,50 @@ const translateField = async (
   return translated || null
 }
 
+/**
+ * Translate several plain-text fields of one entry in a single request.
+ * The timeline translation used to fire one call per field (up to 3x the
+ * requests); batching them cuts per-entry latency roughly in half.
+ */
+const translatePlainFieldsBatched = async (
+  entryId: string,
+  fields: string[],
+  lang: string,
+): Promise<Record<string, string>> => {
+  const entry = getEntry(entryId) as Record<string, unknown> | null
+  if (!entry) return {}
+
+  const sources: Record<string, string> = {}
+  for (const field of fields) {
+    const value = entry[field]
+    if (typeof value === "string" && value.trim()) sources[field] = value
+  }
+  if (Object.keys(sources).length === 0) return {}
+
+  const content = await chatCompletion({
+    temperature: 0.2,
+    preferFast: true,
+    system:
+      "You are a professional translator. You will get a JSON object of labelled texts. Translate every value faithfully into the target language and respond with ONLY a JSON object using the exact same keys. No explanations.",
+    prompt: `Target language: ${lang}\n\n${JSON.stringify(sources)}`,
+  })
+
+  const match = content.match(/\{[\s\S]*\}/)
+  if (!match) return {}
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>
+    const translated: Record<string, string> = {}
+    for (const field of Object.keys(sources)) {
+      const value = parsed[field]
+      if (typeof value === "string" && value.trim()) translated[field] = value.trim()
+    }
+    return translated
+  } catch (error) {
+    console.error(`[own-ai] batched translation parse failed for entry ${entryId}:`, error)
+    return {}
+  }
+}
+
 const translateBatchNDJSON = async (request: OwnAiTranslationBatchBody): Promise<Response> => {
   const { ids, language, fields } = request
   const lang = languageLabel(language)
@@ -175,7 +323,19 @@ const translateBatchNDJSON = async (request: OwnAiTranslationBatchBody): Promise
         while (queue.length > 0) {
           const id = queue.shift()!
           const data: Record<string, string> = {}
-          for (const field of fieldList) {
+
+          // Plain-text fields (title, description, ...) go in one batched call.
+          const plainFields = fieldList.filter((field) => !isHtmlField(field))
+          if (plainFields.length > 0) {
+            try {
+              Object.assign(data, await translatePlainFieldsBatched(id, plainFields, lang))
+            } catch (error) {
+              console.error(`[own-ai] batched translate failed for entry ${id}:`, error)
+            }
+          }
+
+          // HTML fields (full content) are translated individually.
+          for (const field of fieldList.filter(isHtmlField)) {
             try {
               const translated = await translateField(id, field, lang)
               if (translated) data[field] = translated
@@ -183,6 +343,7 @@ const translateBatchNDJSON = async (request: OwnAiTranslationBatchBody): Promise
               console.error(`[own-ai] translate ${field} failed for entry ${id}:`, error)
             }
           }
+
           controller.enqueue(encoder.encode(`${JSON.stringify({ id, data })}\n`))
         }
       }
@@ -226,6 +387,7 @@ const rerankEntries = async <T>(entries: T[]): Promise<T[]> => {
 
   const response = await chatCompletion({
     temperature: 0.2,
+    preferFast: true,
     system:
       "You rank RSS feed entries for a user. Respond with ONLY a JSON array of the item numbers, most relevant first, e.g. [3,0,2,1]. Every number must appear exactly once. No explanation.",
     prompt: `User preference: ${preference}\n\nEntries:\n${lines.join("\n")}\n\nReturn the JSON array now.`,
@@ -315,18 +477,37 @@ export const interceptOwnAIRequest = async (
 
   const pathname = url.pathname.replace(/\/+$/, "") || "/"
 
-  // GET /ai/summary?id=&language=&target=
+  // GET /ai/summary?id=&language=&target= — streamed so the card renders progressively
   if (request.method === "GET" && pathname === "/ai/summary") {
     const id = url.searchParams.get("id") ?? ""
     const language = url.searchParams.get("language") ?? "en"
     const target = (url.searchParams.get("target") ?? "content") as "content" | "readabilityContent"
     console.info("[own-ai] serving /ai/summary locally", id)
+
+    const promptInfo = buildSummaryRequest({ id, language, target })
+    if (!promptInfo) return jsonOk({ code: 0, data: "" })
+
+    jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: "" }))
     try {
-      const text = await summarizeEntry({ id, language, target })
+      const text = (
+        await chatCompletionStreaming({
+          ...promptInfo,
+          temperature: 0.5,
+          preferFast: true,
+          onDelta: (fullText) => {
+            jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: fullText }))
+          },
+        })
+      ).trim()
       return jsonOk({ code: 0, data: text })
     } catch (error) {
       console.error("[own-ai] summary failed:", error)
       return jsonOk({ code: 500, data: "" })
+    } finally {
+      jotaiStore.set(ownAISummaryStreamAtom, (prev) => {
+        const { [id]: _served, ...rest } = prev
+        return rest
+      })
     }
   }
 

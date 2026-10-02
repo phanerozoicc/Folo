@@ -184,6 +184,7 @@ export const defaultAISettings: AISettings = {
     baseURL: "",
     apiKey: "",
     model: "",
+    fastModel: "",
   },
 }
 

@@ -272,6 +272,8 @@
   "own_ai.base_url_description": "OpenAI-compatible base URL, e.g. https://api.openai.com/v1. /chat/completions is appended automatically.",
   "own_ai.enabled": "Enable Own AI",
   "own_ai.enabled_description": "Generate entry summaries and translations directly from this device via your own OpenAI-compatible endpoint. Requests never touch the Folo server and don't consume plan quota.",
+  "own_ai.fast_model_description": "Faster/cheaper model for summary, translation, timeline sort and chat titles. Leave empty to always use the main model.",
+  "own_ai.fast_model_placeholder": "e.g. gpt-4o-mini, glm-4.5-flash (optional)",
   "own_ai.model_description": "Model name, e.g. gpt-4o-mini",
   "own_ai.test.button": "Test connection",
   "own_ai.test.failed": "Connection failed: {{error}}",
