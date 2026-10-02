@@ -445,6 +445,7 @@
   "token_usage_pill.system": "系统",
   "token_usage_pill.total": "总计",
   "token_usage_pill.unknown": "未知",
+  "translation_in_progress": "翻译生成中…",
   "usage_analysis.detailed_description": "全面了解您的 AI 使用模式和洞察",
   "usage_analysis.detailed_title": "AI 使用分析",
   "usage_analysis.no_data": "没有可用的使用数据",

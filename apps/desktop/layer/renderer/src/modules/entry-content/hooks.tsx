@@ -60,7 +60,7 @@ export const useEntryContent = (entryId: string) => {
     language: actionLanguage,
     enabled: enableTranslation,
   })
-  usePrefetchEntryTranslation({
+  const translationQueries = usePrefetchEntryTranslation({
     entryIds: [entryId],
     enabled: shouldPrefetchTranslation,
     language: actionLanguage,
@@ -77,10 +77,13 @@ export const useEntryContent = (entryId: string) => {
       ? contentTranslated?.readabilityContent
       : contentTranslated?.content
     const content = translatedContent || entryContent
+    // A translation pass is in flight when its per-entry query is actively fetching.
+    const isTranslating = translationQueries.some((query) => query.fetchStatus === "fetching")
     return {
       content,
       error,
       isPending,
+      isTranslating,
     }
   }, [
     contentTranslated?.content,
@@ -91,6 +94,7 @@ export const useEntryContent = (entryId: string) => {
     isInReadabilityMode,
     isPending,
     entry?.readabilityContent,
+    translationQueries,
   ])
 }
 
