@@ -46,15 +46,29 @@ export const chatCompletion = async (input: {
   }
   const fastModel = ownAi.fastModel?.trim()
   const model = (input.preferFast && fastModel) || ownAi.model
-  const { content } = await service.chatCompletion({
-    apiKey: ownAi.apiKey,
-    baseURL: ownAi.baseURL,
-    model,
-    system: input.system,
-    prompt: input.prompt,
-    temperature: input.temperature,
-  })
-  return content
+
+  const call = (targetModel: string) =>
+    service.chatCompletion({
+      apiKey: ownAi.apiKey,
+      baseURL: ownAi.baseURL,
+      model: targetModel,
+      system: input.system,
+      prompt: input.prompt,
+      temperature: input.temperature,
+    })
+
+  try {
+    const { content } = await call(model)
+    return content
+  } catch (error) {
+    // A misconfigured fast model must never take the feature down: retry with the main model.
+    if (model !== ownAi.model) {
+      console.warn("[own-ai] fast model failed, retrying with the main model:", error)
+      const { content } = await call(ownAi.model)
+      return content
+    }
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +100,8 @@ const buildSummaryRequest = (input: {
 }
 
 type IpcEventTarget = {
-  on: (channel: string, listener: (...args: unknown[]) => void) => void
-  removeListener: (channel: string, listener: (...args: unknown[]) => void) => void
+  on: (channel: string, listener: (...args: any[]) => void) => void
+  removeListener: (channel: string, listener: (...args: any[]) => void) => void
 }
 
 const getIpcEventTarget = (): IpcEventTarget | null => {
@@ -104,7 +118,92 @@ const STREAM_DONE_EVENT = "own-ai:stream-done"
  * Streaming chat completion. Deltas arrive via webContents events (the same
  * channel the AI chat transport uses, keyed by requestId) so consumers can
  * render partial output while the model is still generating.
+ * Fails over to the main model when the fast model is misconfigured, and
+ * rejects after STREAM_FIRST_DELTA_TIMEOUT_MS without any output so callers
+ * never hang forever.
  */
+const STREAM_STALL_TIMEOUT_MS = 90_000
+
+const streamWithModel = async (
+  input: {
+    system: string
+    prompt: string
+    temperature?: number
+    onDelta?: (fullText: string) => void
+  },
+  ownAi: { baseURL: string; apiKey: string; model: string },
+): Promise<string> => {
+  const service = ipcServices?.ownAi
+  const ipc = getIpcEventTarget()
+  if (!service || !ipc) throw new Error("OwnAI IPC unavailable")
+
+  const requestId = `own-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  return new Promise<string>((resolve, reject) => {
+    let content = ""
+    let settled = false
+    let stalled = false
+
+    const stallTimer = window.setTimeout(() => {
+      if (!settled && content === "") {
+        stalled = true
+        settled = true
+        cleanup()
+        reject(
+          new Error(`OwnAI stream stalled with no output for ${STREAM_STALL_TIMEOUT_MS / 1000}s`),
+        )
+      }
+    }, STREAM_STALL_TIMEOUT_MS)
+
+    const onDelta = (electronEvent: unknown, eventRequestId: string, delta: unknown) => {
+      // ipcRenderer.on listeners receive (event, ...args); the first arg is the Electron event.
+      if (eventRequestId !== requestId || settled) return
+      if (typeof delta === "string" && delta) {
+        content += delta
+        input.onDelta?.(content)
+      }
+    }
+
+    const cleanup = () => {
+      window.clearTimeout(stallTimer)
+      try {
+        ipc.removeListener(STREAM_EVENT, onDelta)
+        ipc.removeListener(STREAM_DONE_EVENT, onDone)
+      } catch {
+        // webContents gone
+      }
+    }
+
+    const onDone = (electronEvent: unknown, eventRequestId: string, errorMessage: unknown) => {
+      if (eventRequestId !== requestId || settled) return
+      settled = true
+      cleanup()
+      if (errorMessage) reject(new Error(String(errorMessage)))
+      else resolve(content)
+    }
+
+    ipc.on(STREAM_EVENT, onDelta)
+    ipc.on(STREAM_DONE_EVENT, onDone)
+
+    service
+      .chatCompletionStream({
+        apiKey: ownAi.apiKey,
+        baseURL: ownAi.baseURL,
+        model: ownAi.model,
+        messages: [
+          { role: "system", content: input.system },
+          { role: "user", content: input.prompt },
+        ],
+        ...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
+        requestId,
+      })
+      .catch(() => {
+        // failures also arrive via the done event; if they don't, the stall timer fires
+        void stalled
+      })
+  })
+}
+
 const chatCompletionStreaming = async (input: {
   system: string
   prompt: string
@@ -123,59 +222,26 @@ const chatCompletionStreaming = async (input: {
   }
 
   const fastModel = ownAi.fastModel?.trim()
-  const model = (input.preferFast && fastModel) || ownAi.model
-  const requestId = `own-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-  return new Promise<string>((resolve, reject) => {
-    let content = ""
-    let settled = false
-
-    const onDelta = (...args: unknown[]) => {
-      const [eventRequestId, delta] = args as [string, string]
-      if (eventRequestId !== requestId) return
-      if (typeof delta === "string" && delta) {
-        content += delta
-        input.onDelta?.(content)
-      }
+  if (input.preferFast && fastModel) {
+    try {
+      const content = await streamWithModel(input, { ...ownAi, model: fastModel })
+      if (content.trim()) return content
+      console.warn("[own-ai] fast model returned an empty stream, falling back to the main model")
+    } catch (error) {
+      console.warn("[own-ai] fast model stream failed, falling back to the main model:", error)
     }
+    // fall through to the main model, then to the non-streaming path
+  }
 
-    const cleanup = () => {
-      try {
-        ipc.removeListener(STREAM_EVENT, onDelta)
-        ipc.removeListener(STREAM_DONE_EVENT, onDone)
-      } catch {
-        // webContents gone
-      }
-    }
-
-    const onDone = (...args: unknown[]) => {
-      const [eventRequestId, errorMessage] = args as [string, string | null]
-      if (eventRequestId !== requestId || settled) return
-      settled = true
-      cleanup()
-      if (errorMessage) reject(new Error(errorMessage))
-      else resolve(content)
-    }
-
-    ipc.on(STREAM_EVENT, onDelta)
-    ipc.on(STREAM_DONE_EVENT, onDone)
-
-    service
-      .chatCompletionStream({
-        apiKey: ownAi.apiKey,
-        baseURL: ownAi.baseURL,
-        model,
-        messages: [
-          { role: "system", content: input.system },
-          { role: "user", content: input.prompt },
-        ],
-        ...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
-        requestId,
-      })
-      .catch(() => {
-        // failures also arrive via the done event
-      })
-  })
+  try {
+    return await streamWithModel(input, ownAi)
+  } catch (error) {
+    console.warn("[own-ai] streaming failed, falling back to non-streaming:", error)
+    const content = await chatCompletion(input)
+    input.onDelta?.(content)
+    return content
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,25 +555,35 @@ export const interceptOwnAIRequest = async (
 
     jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: "" }))
     try {
-      const text = (
-        await chatCompletionStreaming({
-          ...promptInfo,
-          temperature: 0.5,
-          preferFast: true,
-          onDelta: (fullText) => {
-            jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: fullText }))
-          },
-        })
-      ).trim()
-      return jsonOk({ code: 0, data: text })
+      let text = await chatCompletionStreaming({
+        ...promptInfo,
+        temperature: 0.5,
+        preferFast: true,
+        onDelta: (fullText) => {
+          jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: fullText }))
+        },
+      })
+
+      // Never leave the card hanging on an empty result: one plain retry, then a visible error.
+      if (!text.trim()) {
+        console.warn("[own-ai] streamed summary was empty, retrying without streaming")
+        text = await chatCompletion({ ...promptInfo, temperature: 0.5 })
+      }
+      if (!text.trim()) {
+        console.error("[own-ai] summary is empty after retries")
+        return jsonOk({ code: 500, message: "OwnAI returned an empty summary" })
+      }
+      return jsonOk({ code: 0, data: text.trim() })
     } catch (error) {
       console.error("[own-ai] summary failed:", error)
-      return jsonOk({ code: 500, data: "" })
+      return jsonOk({ code: 500, message: String(error).slice(0, 300) })
     } finally {
-      jotaiStore.set(ownAISummaryStreamAtom, (prev) => {
-        const { [id]: _served, ...rest } = prev
-        return rest
-      })
+      window.setTimeout(() => {
+        jotaiStore.set(ownAISummaryStreamAtom, (prev) => {
+          const { [id]: _served, ...rest } = prev
+          return rest
+        })
+      }, 5_000)
     }
   }
 

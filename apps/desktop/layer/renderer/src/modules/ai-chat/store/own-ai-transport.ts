@@ -104,9 +104,9 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
     const requestId = `own-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const ipc = (typeof window !== "undefined" ? window.electron?.ipcRenderer : undefined) as
       | {
-          on: (channel: string, listener: (...args: unknown[]) => void) => void
-          off?: (channel: string, listener: (...args: unknown[]) => void) => void
-          removeListener: (channel: string, listener: (...args: unknown[]) => void) => void
+          on: (channel: string, listener: (...args: any[]) => void) => void
+          off?: (channel: string, listener: (...args: any[]) => void) => void
+          removeListener: (channel: string, listener: (...args: any[]) => void) => void
         }
       | undefined
 
@@ -133,15 +133,29 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
         textId = `text-${Date.now()}`
         controller.enqueue({ type: "text-start", id: textId } as UIMessageChunk)
 
-        const onDelta = (...args: unknown[]) => {
-          const [eventRequestId, delta] = args as [string, string]
+        const onDelta = (electronEvent: unknown, eventRequestId: string, delta: unknown) => {
+          // ipcRenderer.on listeners receive (event, ...args); first arg is the Electron event.
           if (eventRequestId !== requestId || finished) return
           if (typeof delta === "string" && delta.length > 0) {
+            window.clearTimeout(stallTimer)
             controller.enqueue({ type: "text-delta", id: textId, delta } as UIMessageChunk)
           }
         }
 
+        // Never leave the chat spinning forever if the done event is lost.
+        const stallTimer = window.setTimeout(() => {
+          if (finished) return
+          finished = true
+          cleanup()
+          controller.enqueue({
+            type: "error",
+            errorText: "Own AI stream stalled with no output for 90s",
+          } as UIMessageChunk)
+          controller.close()
+        }, 90_000)
+
         const cleanup = () => {
+          window.clearTimeout(stallTimer)
           try {
             ipc.removeListener(STREAM_EVENT, onDelta)
             ipc.removeListener(STREAM_DONE_EVENT, onDone)
@@ -150,8 +164,7 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
           }
         }
 
-        const onDone = (...args: unknown[]) => {
-          const [eventRequestId, errorMessage] = args as [string, string | null]
+        const onDone = (electronEvent: unknown, eventRequestId: string, errorMessage: unknown) => {
           if (eventRequestId !== requestId || finished) return
           finished = true
           cleanup()
@@ -162,7 +175,7 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
           }
 
           if (errorMessage) {
-            controller.enqueue({ type: "error", errorText: errorMessage } as UIMessageChunk)
+            controller.enqueue({ type: "error", errorText: String(errorMessage) } as UIMessageChunk)
             controller.close()
             return
           }

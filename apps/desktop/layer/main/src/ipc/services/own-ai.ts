@@ -108,54 +108,64 @@ export class OwnAiService extends IpcService {
   /**
    * Streaming chat completion. Deltas are pushed to the requesting webContents
    * via `own-ai:stream` events keyed by requestId; the promise resolves with the
-   * full text. `own-ai:stream-done` fires after success or failure.
+   * full text. `own-ai:stream-done` fires after success or failure — the whole
+   * body is wrapped so *no* exception path can skip it (callers hang otherwise).
    */
   @IpcMethod()
   async chatCompletionStream(input: OwnAiChatStreamInput): Promise<{ content: string }> {
     const { baseURL, apiKey, model, messages, temperature, requestId } = input
-    if (!baseURL || !model) {
-      throw new Error("OwnAI is not configured: baseURL and model are required")
-    }
 
-    const sender = getIpcContext().sender
+    let sender: Electron.WebContents | undefined
+    try {
+      sender = getIpcContext().sender
+    } catch {
+      sender = undefined
+    }
+    let doneSent = false
     const push = (channel: string, ...args: unknown[]) => {
-      if (!sender.isDestroyed()) {
+      if (sender && !sender.isDestroyed()) {
         sender.send(channel, requestId, ...args)
       }
     }
-
-    let response: Response
-    try {
-      response = await postChatRequest(
-        resolveEndpoint(baseURL),
-        apiKey,
-        {
-          model,
-          messages,
-          stream: true,
-          ...(typeof temperature === "number" ? { temperature } : {}),
-        },
-        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      )
-    } catch (error) {
-      push(STREAM_DONE_EVENT, String(error).slice(0, 500))
-      throw error
+    const pushDone = (error: string | null) => {
+      if (!doneSent) {
+        doneSent = true
+        push(STREAM_DONE_EVENT, error)
+      }
     }
 
-    if (!response.ok || !response.body) {
-      const text = (await response.text().catch(() => "")).slice(0, 500)
-      const message = `OwnAI request failed (${response.status}): ${text || response.statusText}`
-      push(STREAM_DONE_EVENT, message)
-      throw new Error(message)
-    }
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-    let content = ""
-    let failure: string | null = null
-
     try {
+      if (!baseURL || !model) {
+        throw new Error("OwnAI is not configured: baseURL and model are required")
+      }
+
+      let response: Response
+      try {
+        response = await postChatRequest(
+          resolveEndpoint(baseURL),
+          apiKey,
+          {
+            model,
+            messages,
+            stream: true,
+            ...(typeof temperature === "number" ? { temperature } : {}),
+          },
+          AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        )
+      } catch (error) {
+        throw new Error(String(error).slice(0, 500))
+      }
+
+      if (!response.ok || !response.body) {
+        const text = (await response.text().catch(() => "")).slice(0, 500)
+        throw new Error(`OwnAI request failed (${response.status}): ${text || response.statusText}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let content = ""
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -184,16 +194,12 @@ export class OwnAiService extends IpcService {
           }
         }
       }
+
+      pushDone(null)
+      return { content }
     } catch (error) {
-      failure = String(error).slice(0, 500)
+      pushDone(String(error).slice(0, 500))
+      throw error
     }
-
-    if (failure) {
-      push(STREAM_DONE_EVENT, failure)
-      throw new Error(failure)
-    }
-
-    push(STREAM_DONE_EVENT, null)
-    return { content }
   }
 }
