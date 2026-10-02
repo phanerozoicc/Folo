@@ -2,7 +2,7 @@ import { env } from "@follow/shared/env.desktop"
 import type { HttpChatTransportInitOptions, UIMessageChunk } from "ai"
 import { HttpChatTransport, parseJsonEventStream, uiMessageChunkSchema } from "ai"
 
-import { isOwnAIRuntime } from "~/lib/own-ai-features"
+import { isOwnAIRuntime } from "~/lib/own-ai"
 
 import { getAIModelState } from "../atoms/session"
 import { AIPersistService } from "../services"

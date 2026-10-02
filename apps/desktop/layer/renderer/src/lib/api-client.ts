@@ -13,7 +13,7 @@ import { setLoginModalShow } from "~/atoms/user"
 
 import { ipcServices } from "./client"
 import { getAuthSessionToken, getClientId, getSessionId } from "./client-session"
-import { patchFollowApiWithOwnAI } from "./own-ai"
+import { interceptOwnAIRequest } from "./own-ai"
 
 const isElectronRuntime = () => {
   return IN_ELECTRON || (typeof window !== "undefined" && !!window.electron)
@@ -74,15 +74,15 @@ export const followClient = new FollowClient({
       ...options,
       cache: "no-store",
     })
+    // Own AI: serve summary/translation/timeline-sort/ai-task/chat-config
+    // requests from the user's own endpoint when enabled.
+    const intercepted = await interceptOwnAIRequest(request, (r) => fetchWithElectronAuth(r))
+    if (intercepted) return intercepted
     return fetchWithElectronAuth(request)
   },
 })
 
 export const followApi = followClient.api
-
-// Device-local AI backend: route entry summary & translation to the user's own
-// OpenAI-compatible endpoint when enabled (see Settings → AI → Own AI).
-patchFollowApiWithOwnAI(followApi)
 
 followClient.addRequestInterceptor(async (ctx) => {
   const { options } = ctx
