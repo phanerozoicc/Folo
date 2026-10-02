@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { setAISetting, useAISettingValue } from "~/atoms/settings/ai"
+import { setGeneralSetting, useGeneralSettingKey } from "~/atoms/settings/general"
 import { ipcServices } from "~/lib/client"
 
 import { SettingDescription, SettingSwitch } from "../../control"
@@ -18,6 +19,8 @@ export const OwnAiSection = () => {
     model: "",
     fastModel: "",
   }
+  const summaryAuto = useGeneralSettingKey("summary")
+  const translationAuto = useGeneralSettingKey("translation")
 
   const update = (patch: Partial<typeof ownAi>) => {
     setAISetting("ownAi", { ...ownAi, ...patch })
@@ -56,6 +59,24 @@ export const OwnAiSection = () => {
         label={t("own_ai.enabled")}
       />
       {ownAi.enabled && <SettingDescription>{t("own_ai.enabled_description")}</SettingDescription>}
+
+      {ownAi.enabled && (
+        <>
+          <div className="space-y-1">
+            <SettingSwitch
+              checked={summaryAuto}
+              onCheckedChange={(v) => setGeneralSetting("summary", v)}
+              label={t("own_ai.auto_summary")}
+            />
+            <SettingSwitch
+              checked={translationAuto}
+              onCheckedChange={(v) => setGeneralSetting("translation", v)}
+              label={t("own_ai.auto_translation")}
+            />
+            <SettingDescription>{t("own_ai.auto_switches_description")}</SettingDescription>
+          </div>
+        </>
+      )}
 
       {ownAi.enabled && (
         <div className="space-y-3">

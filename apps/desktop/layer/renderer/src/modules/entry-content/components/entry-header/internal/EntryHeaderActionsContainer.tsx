@@ -3,6 +3,7 @@ import { memo } from "react"
 
 import { useRouteParams } from "~/hooks/biz/useRouteParams"
 
+import { AiHeaderActions } from "../../../actions/ai-header-actions"
 import { EntryHeaderActions } from "../../../actions/header-actions"
 import { MoreActions } from "../../../actions/more-actions"
 import { useEntryHeaderContext } from "./context"
@@ -14,6 +15,7 @@ function EntryHeaderActionsContainerImpl({ isSmallWidth }: { isSmallWidth?: bool
   return (
     <div className={clsx("relative flex shrink-0 items-center justify-end gap-2")}>
       {!isSmallWidth && <EntryHeaderActions entryId={entryId} view={view} />}
+      <AiHeaderActions entryId={entryId} />
       <MoreActions entryId={entryId} view={view} showMainAction={isSmallWidth} />
     </div>
   )
