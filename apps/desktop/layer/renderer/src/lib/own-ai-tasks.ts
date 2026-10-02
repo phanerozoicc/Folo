@@ -167,6 +167,7 @@ const runTask = async (task: LocalTask): Promise<void> => {
     const digest = await collectRecentEntriesDigest()
     const content = await chatCompletion({
       temperature: 0.5,
+      feature: "task",
       system:
         "You are the user's personal RSS reading assistant. Fulfil the user's request based on the recent entries provided. Respond in the same language as the user's request. Markdown is supported.",
       prompt: `${task.prompt}\n\n---\nRecent entries:\n${digest || "(no recent entries)"}`,

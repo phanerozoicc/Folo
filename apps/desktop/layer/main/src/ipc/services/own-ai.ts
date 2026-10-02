@@ -57,6 +57,12 @@ const postChatRequest = (
     body: JSON.stringify(body),
   })
 
+export interface OwnAiUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
 /**
  * Direct bridge to a user configured OpenAI-compatible endpoint.
  * Runs in the main process so renderer CORS policies never apply, and the
@@ -66,7 +72,9 @@ export class OwnAiService extends IpcService {
   static override readonly groupName = "ownAi"
 
   @IpcMethod()
-  async chatCompletion(input: OwnAiChatInput): Promise<{ content: string }> {
+  async chatCompletion(
+    input: OwnAiChatInput,
+  ): Promise<{ content: string; usage: OwnAiUsage | null }> {
     const { baseURL, apiKey, model, system, prompt, temperature } = input
     if (!baseURL || !model) {
       throw new Error("OwnAI is not configured: baseURL and model are required")
@@ -97,12 +105,13 @@ export class OwnAiService extends IpcService {
 
     const data = (await response.json()) as {
       choices?: { message?: { content?: unknown } }[]
+      usage?: OwnAiUsage
     }
     const { content } = data.choices?.[0]?.message ?? {}
     if (typeof content !== "string") {
       throw new TypeError("OwnAI response has no message content")
     }
-    return { content }
+    return { content, usage: data.usage ?? null }
   }
 
   /**
@@ -112,7 +121,9 @@ export class OwnAiService extends IpcService {
    * body is wrapped so *no* exception path can skip it (callers hang otherwise).
    */
   @IpcMethod()
-  async chatCompletionStream(input: OwnAiChatStreamInput): Promise<{ content: string }> {
+  async chatCompletionStream(
+    input: OwnAiChatStreamInput,
+  ): Promise<{ content: string; usage: OwnAiUsage | null }> {
     const { baseURL, apiKey, model, messages, temperature, requestId } = input
 
     let sender: Electron.WebContents | undefined
@@ -148,6 +159,8 @@ export class OwnAiService extends IpcService {
             model,
             messages,
             stream: true,
+            // Ask the provider to send token usage in the final stream chunk.
+            stream_options: { include_usage: true },
             ...(typeof temperature === "number" ? { temperature } : {}),
           },
           AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -165,6 +178,7 @@ export class OwnAiService extends IpcService {
       const decoder = new TextDecoder()
       let buffer = ""
       let content = ""
+      let usage: OwnAiUsage | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -183,6 +197,10 @@ export class OwnAiService extends IpcService {
           try {
             const parsed = JSON.parse(payload) as {
               choices?: { delta?: { content?: unknown } }[]
+              usage?: OwnAiUsage
+            }
+            if (parsed.usage && typeof parsed.usage === "object") {
+              usage = parsed.usage
             }
             const delta = parsed.choices?.[0]?.delta?.content
             if (typeof delta === "string" && delta.length > 0) {
@@ -196,7 +214,7 @@ export class OwnAiService extends IpcService {
       }
 
       pushDone(null)
-      return { content }
+      return { content, usage }
     } catch (error) {
       pushDone(String(error).slice(0, 500))
       throw error

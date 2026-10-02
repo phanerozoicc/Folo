@@ -8,6 +8,8 @@ import { jotaiStore } from "~/lib/jotai"
 
 import { ipcServices } from "./client"
 import { handleAiTaskRequest, startOwnAITaskScheduler } from "./own-ai-tasks"
+import type { OwnAiFeature } from "./own-ai-usage"
+import { estimateTokens, recordOwnAiUsage } from "./own-ai-usage"
 
 // Own AI generates translations on this device, so the free-plan gate must not block them.
 setTranslationPlanGateBypass(() => isOwnAIEnabled())
@@ -38,6 +40,7 @@ export const chatCompletion = async (input: {
   temperature?: number
   /** Use the configured fast model for high-volume, low-complexity tasks. */
   preferFast?: boolean
+  feature: OwnAiFeature
 }) => {
   const ownAi = getOwnAISettings()
   const service = ipcServices?.ownAi
@@ -47,8 +50,8 @@ export const chatCompletion = async (input: {
   const fastModel = ownAi.fastModel?.trim()
   const model = (input.preferFast && fastModel) || ownAi.model
 
-  const call = (targetModel: string) =>
-    service.chatCompletion({
+  const call = async (targetModel: string) => {
+    const { content, usage } = await service.chatCompletion({
       apiKey: ownAi.apiKey,
       baseURL: ownAi.baseURL,
       model: targetModel,
@@ -56,16 +59,26 @@ export const chatCompletion = async (input: {
       prompt: input.prompt,
       temperature: input.temperature,
     })
+    recordOwnAiUsage({
+      feature: input.feature,
+      model: targetModel,
+      promptTokens: usage?.prompt_tokens ?? estimateTokens(`${input.system}\n${input.prompt}`),
+      completionTokens: usage?.completion_tokens ?? estimateTokens(content),
+      totalTokens:
+        usage?.total_tokens ??
+        (usage?.prompt_tokens ?? estimateTokens(`${input.system}\n${input.prompt}`)) +
+          (usage?.completion_tokens ?? estimateTokens(content)),
+    })
+    return content
+  }
 
   try {
-    const { content } = await call(model)
-    return content
+    return await call(model)
   } catch (error) {
     // A misconfigured fast model must never take the feature down: retry with the main model.
     if (model !== ownAi.model) {
       console.warn("[own-ai] fast model failed, retrying with the main model:", error)
-      const { content } = await call(ownAi.model)
-      return content
+      return await call(ownAi.model)
     }
     throw error
   }
@@ -124,6 +137,30 @@ const STREAM_DONE_EVENT = "own-ai:stream-done"
  */
 const STREAM_STALL_TIMEOUT_MS = 90_000
 
+interface OwnAiIpcUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
+const recordStreamUsage = (
+  feature: OwnAiFeature,
+  model: string,
+  usage: OwnAiIpcUsage | null,
+  inputText: string,
+  outputText: string,
+) => {
+  const promptTokens = usage?.prompt_tokens ?? estimateTokens(inputText)
+  const completionTokens = usage?.completion_tokens ?? estimateTokens(outputText)
+  recordOwnAiUsage({
+    feature,
+    model,
+    promptTokens,
+    completionTokens,
+    totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
+  })
+}
+
 const streamWithModel = async (
   input: {
     system: string
@@ -132,17 +169,18 @@ const streamWithModel = async (
     onDelta?: (fullText: string) => void
   },
   ownAi: { baseURL: string; apiKey: string; model: string },
-): Promise<string> => {
+): Promise<{ content: string; usage: OwnAiIpcUsage | null }> => {
   const service = ipcServices?.ownAi
   const ipc = getIpcEventTarget()
   if (!service || !ipc) throw new Error("OwnAI IPC unavailable")
 
   const requestId = `own-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ content: string; usage: OwnAiIpcUsage | null }>((resolve, reject) => {
     let content = ""
     let settled = false
     let stalled = false
+    const streamUsage: OwnAiIpcUsage | null = null
 
     const stallTimer = window.setTimeout(() => {
       if (!settled && content === "") {
@@ -179,7 +217,7 @@ const streamWithModel = async (
       settled = true
       cleanup()
       if (errorMessage) reject(new Error(String(errorMessage)))
-      else resolve(content)
+      else resolve({ content, usage: streamUsage })
     }
 
     ipc.on(STREAM_EVENT, onDelta)
@@ -209,6 +247,7 @@ const chatCompletionStreaming = async (input: {
   prompt: string
   temperature?: number
   preferFast?: boolean
+  feature: OwnAiFeature
   onDelta?: (fullText: string) => void
 }): Promise<string> => {
   const ownAi = getOwnAISettings()
@@ -225,8 +264,17 @@ const chatCompletionStreaming = async (input: {
 
   if (input.preferFast && fastModel) {
     try {
-      const content = await streamWithModel(input, { ...ownAi, model: fastModel })
-      if (content.trim()) return content
+      const { content, usage } = await streamWithModel(input, { ...ownAi, model: fastModel })
+      if (content.trim()) {
+        recordStreamUsage(
+          input.feature,
+          fastModel,
+          usage,
+          `${input.system}\n${input.prompt}`,
+          content,
+        )
+        return content
+      }
       console.warn("[own-ai] fast model returned an empty stream, falling back to the main model")
     } catch (error) {
       console.warn("[own-ai] fast model stream failed, falling back to the main model:", error)
@@ -235,7 +283,15 @@ const chatCompletionStreaming = async (input: {
   }
 
   try {
-    return await streamWithModel(input, ownAi)
+    const { content, usage } = await streamWithModel(input, ownAi)
+    recordStreamUsage(
+      input.feature,
+      ownAi.model,
+      usage,
+      `${input.system}\n${input.prompt}`,
+      content,
+    )
+    return content
   } catch (error) {
     console.warn("[own-ai] streaming failed, falling back to non-streaming:", error)
     const content = await chatCompletion(input)
@@ -290,7 +346,13 @@ const translateText = async (text: string, lang: string, preserveHtml: boolean) 
       ? `The content is HTML. Translate only the human-readable text; keep every HTML tag, attribute, URL, code block and media element exactly as-is.`
       : `Translate the text as-is.`
     const prompt = `Translate the following content into ${lang}. ${requirement}\n\n<content>\n${chunk}\n</content>`
-    const content = await chatCompletion({ temperature: 0.2, system, prompt, preferFast: true })
+    const content = await chatCompletion({
+      temperature: 0.2,
+      system,
+      prompt,
+      preferFast: true,
+      feature: "translation",
+    })
     results.push(
       content
         .trim()
@@ -352,6 +414,7 @@ const translatePlainFieldsBatched = async (
   const content = await chatCompletion({
     temperature: 0.2,
     preferFast: true,
+    feature: "translation",
     system:
       "You are a professional translator. You will get a JSON object of labelled texts. Translate every value faithfully into the target language and respond with ONLY a JSON object using the exact same keys. No explanations.",
     prompt: `Target language: ${lang}\n\n${JSON.stringify(sources)}`,
@@ -454,6 +517,7 @@ const rerankEntries = async <T>(entries: T[]): Promise<T[]> => {
   const response = await chatCompletion({
     temperature: 0.2,
     preferFast: true,
+    feature: "sort",
     system:
       "You rank RSS feed entries for a user. Respond with ONLY a JSON array of the item numbers, most relevant first, e.g. [3,0,2,1]. Every number must appear exactly once. No explanation.",
     prompt: `User preference: ${preference}\n\nEntries:\n${lines.join("\n")}\n\nReturn the JSON array now.`,
@@ -559,6 +623,7 @@ export const interceptOwnAIRequest = async (
         ...promptInfo,
         temperature: 0.5,
         preferFast: true,
+        feature: "summary",
         onDelta: (fullText) => {
           jotaiStore.set(ownAISummaryStreamAtom, (prev) => ({ ...prev, [id]: fullText }))
         },
@@ -567,7 +632,7 @@ export const interceptOwnAIRequest = async (
       // Never leave the card hanging on an empty result: one plain retry, then a visible error.
       if (!text.trim()) {
         console.warn("[own-ai] streamed summary was empty, retrying without streaming")
-        text = await chatCompletion({ ...promptInfo, temperature: 0.5 })
+        text = await chatCompletion({ ...promptInfo, temperature: 0.5, feature: "summary" })
       }
       if (!text.trim()) {
         console.error("[own-ai] summary is empty after retries")

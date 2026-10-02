@@ -3,6 +3,7 @@ import { HttpChatTransport } from "ai"
 
 import { getAISettings, getOwnAISettings } from "~/atoms/settings/ai"
 import { ipcServices } from "~/lib/client"
+import { recordOwnAiUsage } from "~/lib/own-ai-usage"
 
 import { AIPersistService } from "../services"
 import type { CreateChatTransportOptions } from "./transport"
@@ -10,6 +11,12 @@ import type { BizUIMessage } from "./types"
 
 const STREAM_EVENT = "own-ai:stream"
 const STREAM_DONE_EVENT = "own-ai:stream-done"
+
+interface OwnAiStreamUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
 
 const BASE_SYSTEM_PROMPT =
   "You are Folo's reading assistant. Answer helpfully and concisely, in the language the user writes in."
@@ -115,6 +122,7 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
 
     let finished = false
     let textId = ""
+    let chatUsage: OwnAiStreamUsage | null = null
 
     const stream = new ReadableStream<UIMessageChunk>({
       start: (controller) => {
@@ -189,11 +197,26 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
               modelUsed: ownAi.model,
               providerType: "byok",
               provider: "own-ai",
+              totalTokens: chatUsage?.total_tokens,
+              outputTokens: chatUsage?.completion_tokens,
             },
           } as UIMessageChunk)
           controller.close()
 
           void this.maybeGenerateTitle(messages, onlyUserMessage)
+        }
+
+        const onIpcResult = (result: { content: string; usage: OwnAiStreamUsage | null }) => {
+          recordOwnAiUsage({
+            feature: "chat",
+            model: ownAi.model,
+            promptTokens: result.usage?.prompt_tokens ?? 0,
+            completionTokens: result.usage?.completion_tokens ?? 0,
+            totalTokens:
+              result.usage?.total_tokens ??
+              (result.usage?.prompt_tokens ?? 0) + (result.usage?.completion_tokens ?? 0),
+          })
+          chatUsage = result.usage
         }
 
         ipc.on(STREAM_EVENT, onDelta)
@@ -206,6 +229,14 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
             model: ownAi.model,
             messages: chatMessages,
             requestId,
+          })
+          .then((result) => {
+            onIpcResult(result)
+            // The done event drives stream finalization; if it somehow never
+            // arrived but the IPC promise resolved, finalize here instead.
+            if (!finished) {
+              onDone(undefined, requestId, null)
+            }
           })
           .catch(() => {
             // errors also arrive via the done event; keep this guard to avoid unhandled rejections
@@ -256,14 +287,23 @@ export class OwnAiChatTransport extends HttpChatTransport<BizUIMessage> {
           .slice(0, 500) ?? ""
       if (!firstUserText) return
 
-      const { content } = await service.chatCompletion({
+      const titleModel = ownAi.fastModel?.trim() || ownAi.model
+      const { content, usage } = await service.chatCompletion({
         apiKey: ownAi.apiKey,
         baseURL: ownAi.baseURL,
-        model: ownAi.fastModel?.trim() || ownAi.model,
+        model: titleModel,
         system:
           "Generate a concise chat title (max 20 characters) in the language of the text. Output ONLY the title.",
         prompt: firstUserText,
         temperature: 0.3,
+      })
+      recordOwnAiUsage({
+        feature: "title",
+        model: titleModel,
+        promptTokens: usage?.prompt_tokens ?? 0,
+        completionTokens: usage?.completion_tokens ?? 0,
+        totalTokens:
+          usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0),
       })
 
       const title = content
