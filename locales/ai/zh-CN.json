@@ -307,6 +307,7 @@
   "rate_limit.resets_tomorrow": "将于明天重置",
   "rate_limit.upgrade_plan_button": "免费试用",
   "rate_limit.upgrade_to_get_more": "开启免费试用以获得更多 AI 额度。",
+  "retranslate_entry": "重新翻译当前文章",
   "schedule.configuration_label": "配置",
   "schedule.date_time_label": "日期和时间",
   "schedule.date_time_placeholder": "选择日期和时间",

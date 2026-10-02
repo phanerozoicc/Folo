@@ -85,6 +85,13 @@ class TranslationActions implements Hydratable, Resetable {
   getTranslation(entryId: string, language: SupportedActionLanguage) {
     return get().data[entryId]?.[language]
   }
+
+  /** Drop every cached translation of one entry so the next request regenerates it. */
+  clearEntry(entryId: string) {
+    immerSet((state) => {
+      delete state.data[entryId]
+    })
+  }
 }
 
 export const translationActions = new TranslationActions()
