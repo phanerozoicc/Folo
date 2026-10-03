@@ -194,13 +194,18 @@ class TranslationSyncService {
 
             if (this.currentMode && this.currentMode !== group.mode) return
 
+            // A stream may deliver multiple lines per entry (segmented
+            // content translation); merge each line into what we already
+            // have instead of replacing the record wholesale.
+            const prev = results[key] ?? translationActions.getTranslation(json.id, group.language)
+
             const translation: TranslationModel = {
               entryId: json.id,
               language: group.language,
-              title: null,
-              description: null,
-              content: null,
-              readabilityContent: null,
+              title: prev?.title ?? null,
+              description: prev?.description ?? null,
+              content: prev?.content ?? null,
+              readabilityContent: prev?.readabilityContent ?? null,
             }
 
             const { title, description, content, readabilityContent } = json.data || {}

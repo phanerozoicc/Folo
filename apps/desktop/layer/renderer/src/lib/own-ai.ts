@@ -38,6 +38,8 @@ export const chatCompletion = async (input: {
   system: string
   prompt: string
   temperature?: number
+  /** Cap the provider's completion size (output tokens). */
+  maxTokens?: number
   /** Use the configured fast model for high-volume, low-complexity tasks. */
   preferFast?: boolean
   feature: OwnAiFeature
@@ -58,6 +60,7 @@ export const chatCompletion = async (input: {
       system: input.system,
       prompt: input.prompt,
       temperature: input.temperature,
+      maxTokens: input.maxTokens,
     })
     recordOwnAiUsage({
       feature: input.feature,
@@ -312,8 +315,12 @@ interface OwnAiTranslationBatchBody {
 }
 
 const MAX_TRANSLATION_CHARS = 60_000
-const TRANSLATION_CHUNK_CHARS = 8_000
-const TRANSLATION_CONCURRENCY = 6
+// Small chunks keep every request short: each finished segment is emitted to
+// the UI immediately, so long articles render progressively instead of
+// blocking for minutes on a single huge completion.
+const TRANSLATION_CHUNK_CHARS = 3_000
+const TRANSLATION_CHUNK_CONCURRENCY = 4
+const TRANSLATION_CONCURRENCY = 4
 
 const splitForTranslation = (text: string) => {
   if (text.length <= TRANSLATION_CHUNK_CHARS) return [text]
@@ -335,32 +342,103 @@ const splitForTranslation = (text: string) => {
   return chunks
 }
 
-const translateText = async (text: string, lang: string, preserveHtml: boolean) => {
-  const chunks = splitForTranslation(text)
+// One shared slot pool across all entries: bounds total parallel LLM calls
+// no matter how many entries or chunks are in flight.
+let chunkSlots = 0
+const chunkWaiters: (() => void)[] = []
+const acquireChunkSlot = async () => {
+  if (chunkSlots < TRANSLATION_CHUNK_CONCURRENCY) {
+    chunkSlots++
+    return
+  }
+  await new Promise<void>((resolve) => chunkWaiters.push(resolve))
+}
+const releaseChunkSlot = () => {
+  const next = chunkWaiters.shift()
+  if (next) next()
+  else chunkSlots--
+}
+
+const translateChunk = async (chunk: string, lang: string, preserveHtml: boolean) => {
   const system =
     "You are a professional translator. Translate faithfully, keep the original tone, format and formatting markers. Output ONLY the translation, without explanations, quotes or extra wrappers."
-
-  const results: string[] = []
-  for (const chunk of chunks) {
-    const requirement = preserveHtml
-      ? `The content is HTML. Translate only the human-readable text; keep every HTML tag, attribute, URL, code block and media element exactly as-is.`
-      : `Translate the text as-is.`
-    const prompt = `Translate the following content into ${lang}. ${requirement}\n\n<content>\n${chunk}\n</content>`
-    const content = await chatCompletion({
+  const requirement = preserveHtml
+    ? `The content is HTML. Translate only the human-readable text; keep every HTML tag, attribute, URL, code block and media element exactly as-is. This is one segment of a longer document — translate it standalone, do not add introductions or summaries.`
+    : `Translate the text as-is. This is one segment of a longer document.`
+  const prompt = `Translate the following content into ${lang}. ${requirement}\n\n<content>\n${chunk}\n</content>`
+  const call = () =>
+    chatCompletion({
       temperature: 0.2,
       system,
       prompt,
       preferFast: true,
+      maxTokens: 8_192,
       feature: "translation",
     })
-    results.push(
-      content
-        .trim()
-        .replace(/^<content>/i, "")
-        .replace(/<\/content>$/i, "")
-        .trim(),
-    )
+  let content: string
+  try {
+    content = await call()
+  } catch (error) {
+    // One retry before giving up on this segment.
+    console.warn("[own-ai] translation chunk failed, retrying once:", error)
+    content = await call()
   }
+  return content
+    .trim()
+    .replace(/^<content>/i, "")
+    .replace(/<\/content>$/i, "")
+    .trim()
+}
+
+/**
+ * Translate text as independent segments in parallel. `onProgress` fires with
+ * the contiguous translated prefix each time a segment completes, letting the
+ * caller stream partial results to the UI.
+ */
+const translateText = async (
+  text: string,
+  lang: string,
+  preserveHtml: boolean,
+  onProgress?: (partial: string) => void,
+) => {
+  const chunks = splitForTranslation(text)
+  const first = chunks[0]
+  if (chunks.length === 1 && first !== undefined) {
+    const translated = await translateChunk(first, lang, preserveHtml)
+    onProgress?.(translated)
+    return translated
+  }
+
+  const results: (string | undefined)[] = Array.from({ length: chunks.length })
+  let nextIndex = 0
+  const emitPrefix = () => {
+    let end = 0
+    while (end < results.length && results[end] !== undefined) end++
+    if (end > 0) onProgress?.(results.slice(0, end).join(""))
+  }
+
+  const worker = async () => {
+    while (nextIndex < chunks.length) {
+      const index = nextIndex++
+      const chunk = chunks[index]
+      if (chunk === undefined) break
+      await acquireChunkSlot()
+      let translated: string
+      try {
+        translated = await translateChunk(chunk, lang, preserveHtml)
+      } catch (error) {
+        console.error(`[own-ai] translation chunk ${index} failed, keeping original:`, error)
+        translated = chunk
+      }
+      releaseChunkSlot()
+      results[index] = translated
+      emitPrefix()
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(TRANSLATION_CHUNK_CONCURRENCY, chunks.length) }, () => worker()),
+  )
   return results.join("")
 }
 
@@ -370,6 +448,7 @@ const translateField = async (
   entryId: string,
   field: string,
   lang: string,
+  onProgress?: (partial: string) => void,
 ): Promise<string | null> => {
   const entry = getEntry(entryId) as Record<string, unknown> | null
   if (!entry) return null
@@ -387,6 +466,7 @@ const translateField = async (
     source.slice(0, MAX_TRANSLATION_CHARS),
     lang,
     isHtmlField(field),
+    onProgress,
   )
   return translated || null
 }
@@ -448,32 +528,38 @@ const translateBatchNDJSON = async (request: OwnAiTranslationBatchBody): Promise
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const queue = [...ids]
+      const emit = (id: string, data: Record<string, string>) => {
+        if (Object.keys(data).length === 0) return
+        controller.enqueue(encoder.encode(`${JSON.stringify({ id, data })}\n`))
+      }
+
       const worker = async () => {
         while (queue.length > 0) {
           const id = queue.shift()!
-          const data: Record<string, string> = {}
 
-          // Plain-text fields (title, description, ...) go in one batched call.
+          // Plain-text fields (title, description, ...) go in one batched call
+          // and are emitted immediately, so titles appear within seconds.
           const plainFields = fieldList.filter((field) => !isHtmlField(field))
           if (plainFields.length > 0) {
             try {
-              Object.assign(data, await translatePlainFieldsBatched(id, plainFields, lang))
+              emit(id, await translatePlainFieldsBatched(id, plainFields, lang))
             } catch (error) {
               console.error(`[own-ai] batched translate failed for entry ${id}:`, error)
             }
           }
 
-          // HTML fields (full content) are translated individually.
+          // HTML fields (full content) stream their translated prefix after
+          // every finished segment — the client merges partial updates.
           for (const field of fieldList.filter(isHtmlField)) {
             try {
-              const translated = await translateField(id, field, lang)
-              if (translated) data[field] = translated
+              const translated = await translateField(id, field, lang, (partial) =>
+                emit(id, { [field]: partial }),
+              )
+              if (translated) emit(id, { [field]: translated })
             } catch (error) {
               console.error(`[own-ai] translate ${field} failed for entry ${id}:`, error)
             }
           }
-
-          controller.enqueue(encoder.encode(`${JSON.stringify({ id, data })}\n`))
         }
       }
 

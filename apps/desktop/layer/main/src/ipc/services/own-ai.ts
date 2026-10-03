@@ -8,6 +8,7 @@ export interface OwnAiChatInput {
   system?: string
   prompt: string
   temperature?: number
+  maxTokens?: number
 }
 
 export interface OwnAiChatStreamMessage {
@@ -75,7 +76,7 @@ export class OwnAiService extends IpcService {
   async chatCompletion(
     input: OwnAiChatInput,
   ): Promise<{ content: string; usage: OwnAiUsage | null }> {
-    const { baseURL, apiKey, model, system, prompt, temperature } = input
+    const { baseURL, apiKey, model, system, prompt, temperature, maxTokens } = input
     if (!baseURL || !model) {
       throw new Error("OwnAI is not configured: baseURL and model are required")
     }
@@ -94,6 +95,7 @@ export class OwnAiService extends IpcService {
         messages,
         stream: false,
         ...(typeof temperature === "number" ? { temperature } : {}),
+        ...(typeof maxTokens === "number" ? { max_tokens: maxTokens } : {}),
       },
       AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     )
