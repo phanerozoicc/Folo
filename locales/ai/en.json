@@ -447,6 +447,7 @@
   "token_usage_pill.total": "Total",
   "token_usage_pill.unknown": "Unknown",
   "translation_in_progress": "Translating…",
+  "translation_not_needed": "The original is already in the target language — nothing to translate",
   "usage_analysis.detailed_description": "Comprehensive overview of your AI usage patterns and insights",
   "usage_analysis.detailed_title": "AI Usage Analytics",
   "usage_analysis.no_data": "No usage data available",

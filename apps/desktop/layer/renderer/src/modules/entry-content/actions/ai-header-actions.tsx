@@ -1,9 +1,12 @@
 import { ActionButton } from "@follow/components/ui/button/index.js"
 import { RotatingRefreshIcon } from "@follow/components/ui/loading/index.jsx"
+import { getEntry } from "@follow/store/entry/getter"
 import { translationActions } from "@follow/store/translation/store"
+import { checkLanguage } from "@follow/utils/language"
 import { useQueryClient } from "@tanstack/react-query"
 import { memo } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
 import {
   disableShowAISummaryOnce,
@@ -11,7 +14,7 @@ import {
   useShowAISummaryOnce,
 } from "~/atoms/ai-summary"
 import { toggleShowAITranslationOnce, useShowAITranslationOnce } from "~/atoms/ai-translation"
-import { useGeneralSettingKey } from "~/atoms/settings/general"
+import { useActionLanguage, useGeneralSettingKey } from "~/atoms/settings/general"
 import { useEntryContent } from "~/modules/entry-content/hooks"
 
 /**
@@ -27,11 +30,31 @@ export const AiHeaderActions = memo(({ entryId }: { entryId: string }) => {
 
   const summaryAuto = useGeneralSettingKey("summary")
   const translationAuto = useGeneralSettingKey("translation")
+  const actionLanguage = useActionLanguage()
   const summaryOnce = useShowAISummaryOnce()
   const translationOnce = useShowAITranslationOnce()
   const { isTranslating } = useEntryContent(entryId)
 
   const handleTranslate = () => {
+    // The pipeline skips entries whose source language already equals the
+    // target language (e.g. Chinese article, Chinese UI) without firing any
+    // request. Surface that instead of doing nothing.
+    const entry = getEntry(entryId) as Record<string, unknown> | null
+    const candidates = [
+      entry?.title,
+      entry?.description,
+      (entry?.readabilityContent as string | undefined) ?? (entry?.content as string | undefined),
+    ]
+    const hasTranslatable = candidates.some(
+      (value) =>
+        typeof value === "string" &&
+        value.trim().length > 0 &&
+        !checkLanguage({ content: value, language: actionLanguage }),
+    )
+    if (!hasTranslatable) {
+      toast.info(t("translation_not_needed"))
+      return
+    }
     if (translationAuto) {
       // Auto translation is on: drop this entry's cached translations and
       // regenerate them through Own AI.

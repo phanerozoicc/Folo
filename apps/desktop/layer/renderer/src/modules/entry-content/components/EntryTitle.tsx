@@ -134,7 +134,14 @@ export const EntryTitle = ({
         >
           <EntryTranslation
             source={titleCaseIfEnglish(entry.title ?? "", entry.language)}
-            target={titleCaseIfEnglish(translation?.title ?? "", actionLanguage)}
+            target={titleCaseIfEnglish(
+              // Same-text "translation" (e.g. Chinese→Chinese echo from a
+              // misdetect before the guard) must not render the title twice.
+              translation?.title && translation.title.trim() !== (entry.title ?? "").trim()
+                ? translation.title
+                : "",
+              actionLanguage,
+            )}
             className="autospace-normal inline-block select-text hyphens-auto text-text duration-200"
             inline={false}
           />
