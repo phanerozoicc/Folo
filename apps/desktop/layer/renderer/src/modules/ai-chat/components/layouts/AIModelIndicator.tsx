@@ -4,6 +4,7 @@ import { useUserRole } from "@follow/store/user/hooks"
 import { cn } from "@follow/utils"
 import { Fragment, memo, useMemo } from "react"
 
+import { useOwnAIActive } from "~/atoms/settings/ai"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -81,6 +82,7 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
   const { data, changeModel } = useAIModel()
   const { defaultModel, availableModels = [], currentModel, availableModelsMenu = [] } = data || {}
   const role = useUserRole()
+  const ownAiActive = useOwnAIActive()
   const settingModalPresent = useSettingModal()
 
   const { provider, modelName } = useMemo(() => {
@@ -132,7 +134,7 @@ export const AIModelIndicator = memo(({ className, onModelChange }: AIModelIndic
             const itemIconClass = providerIcons[itemProvider] || providerIcons.auto
             const isSelected = value === (currentModel || defaultModel)
             const normalizedPaidLevel = isModelPaidLevel(paidLevel) ? paidLevel : undefined
-            const requiresUpgrade = !hasAccessToPaidLevel(role, normalizedPaidLevel)
+            const requiresUpgrade = !ownAiActive && !hasAccessToPaidLevel(role, normalizedPaidLevel)
 
             const handleModelSelect = () => {
               if (requiresUpgrade) {

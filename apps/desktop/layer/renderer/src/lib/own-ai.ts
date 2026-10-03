@@ -565,7 +565,12 @@ const ownAIModelConfig = () => {
       windowDuration: 86_400_000,
       windowResetTime: Date.now() + 86_400_000,
     },
-    usage: { total: 0, used: 0, remaining: 0, resetAt: new Date().toISOString() },
+    usage: {
+      total: 0,
+      used: 0,
+      remaining: Number.MAX_SAFE_INTEGER,
+      resetAt: new Date(Date.now() + 86_400_000).toISOString(),
+    },
     freeQuota: {
       shouldCheckDailyLimit: false,
       remainingRequests: 0,

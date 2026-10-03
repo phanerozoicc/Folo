@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useIsPaymentEnabled } from "~/atoms/server-configs"
+import { useOwnAIActive } from "~/atoms/settings/ai"
 import { useSpotlightSettingKey } from "~/atoms/settings/spotlight"
 import { CopyButton } from "~/components/ui/button/CopyButton"
 import { Markdown } from "~/components/ui/markdown/Markdown"
@@ -113,8 +114,12 @@ export const AISummaryCardBase: React.FC<AISummaryCardBaseProps> = ({
   const spotlightRules = useSpotlightSettingKey("spotlights")
 
   const hasContent = !isLoading && content
+  const ownAiActive = useOwnAIActive()
+  const isPaymentEnabled = useIsPaymentEnabled()
   const shouldSuggestUpgrade =
-    useIsPaymentEnabled() && error instanceof FollowAPIError ? error.status === 402 : undefined
+    !ownAiActive && isPaymentEnabled && error instanceof FollowAPIError
+      ? error.status === 402
+      : undefined
 
   return (
     <div

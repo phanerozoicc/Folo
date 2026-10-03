@@ -2,6 +2,7 @@ import { cn } from "@follow/utils"
 import { m } from "motion/react"
 
 import { useIsInMASReview } from "~/atoms/server-configs"
+import { useOwnAIActive } from "~/atoms/settings/ai"
 import { useI18n } from "~/hooks/common/useI18n"
 import { useSettingModal } from "~/modules/settings/modal/useSettingModal"
 
@@ -18,8 +19,9 @@ export const RateLimitNotice = ({ className, message }: RateLimitNoticeProps) =>
   const t = useI18n()
   const settingModalPresent = useSettingModal()
   const isInMASReview = useIsInMASReview()
+  const ownAiActive = useOwnAIActive()
 
-  if (!message || isInMASReview) {
+  if (!message || isInMASReview || ownAiActive) {
     return
   }
 
