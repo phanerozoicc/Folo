@@ -577,6 +577,9 @@ const translateBatchNDJSON = async (request: OwnAiTranslationBatchBody): Promise
 // ---------------------------------------------------------------------------
 
 const RERANK_MAX_ENTRIES = 40
+// The LLM must never hold the entries HTTP response hostage: when the
+// provider is slow or rate-limited, fall back to the original order.
+const RERANK_TIMEOUT_MS = 10_000
 
 const rerankEntries = async <T>(entries: T[]): Promise<T[]> => {
   if (entries.length < 3) return entries
@@ -784,7 +787,12 @@ export const interceptOwnAIRequest = async (
 
     console.info("[own-ai] re-ranking", payload.data.length, "entries locally")
     try {
-      payload.data = await rerankEntries(payload.data)
+      const ranked = await Promise.race([
+        rerankEntries(payload.data),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), RERANK_TIMEOUT_MS)),
+      ])
+      if (ranked) payload.data = ranked
+      else console.warn("[own-ai] local timeline sort timed out, keeping original order")
     } catch (error) {
       console.error("[own-ai] local timeline sort failed, keeping original order:", error)
       return original
