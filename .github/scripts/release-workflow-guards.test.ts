@@ -17,10 +17,33 @@ describe("release build workflow guards", () => {
     expect(iosWorkflow).toContain("release(desktop):")
   })
 
+  // Android builds once shipped the 0.0.0-dev runtime unnoticed, so every EAS build checks it.
+  it("verifies the native OTA runtime version in every EAS mobile build", () => {
+    const mobilePackage = JSON.parse(
+      readFileSync(new URL("../../apps/mobile/package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> }
+
+    expect(mobilePackage.scripts["eas-build-post-install"]).toContain(
+      "scripts/verify-native-runtime-version.ts",
+    )
+  })
+
   it("skips direct desktop push builds for mobile release commits on mobile-main", () => {
     const desktopWorkflow = workflow("build-desktop.yml")
 
     expect(desktopWorkflow).toContain("github.ref == 'refs/heads/mobile-main'")
     expect(desktopWorkflow).toContain("release(mobile):")
+  })
+
+  // The sync PRs that merge main and mobile-main back into dev are opened with GITHUB_TOKEN, which
+  // starts no pull_request workflows. Their auto-merge waits for dev's required checks, so those
+  // checks have to run on pushes to both release branches.
+  it("runs dev's required checks on pushes to both release branches", () => {
+    for (const name of ["lint.yml", "build-web.yml"]) {
+      const pushBranches = workflow(name).match(/^ {2}push:\n {4}branches: \[([^\]]*)\]$/m)?.[1]
+      const branches = pushBranches?.split(",").map((branch) => branch.trim())
+
+      expect(branches).toEqual(expect.arrayContaining(["main", "dev", "mobile-main"]))
+    }
   })
 })

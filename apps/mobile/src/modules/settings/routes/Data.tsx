@@ -14,7 +14,8 @@ import {
   GroupedInsetListSectionHeader,
 } from "@/src/components/ui/grouped/GroupedList"
 import { Switch } from "@/src/components/ui/switch/Switch"
-import { getDbPath } from "@/src/database"
+import { setAnonymousDataEnabled } from "@/src/initialize/analytics"
+import { scheduleLocalDataReset } from "@/src/lib/local-data-reset"
 import { reloadApp } from "@/src/lib/reload-app"
 import { toast } from "@/src/lib/toast"
 
@@ -40,6 +41,7 @@ export const DataScreen = () => {
             value={sendAnonymousData}
             onValueChange={(val) => {
               setDataSetting("sendAnonymousData", val)
+              void setAnonymousDataEnabled(val).catch(console.error)
             }}
           />
         </GroupedInsetListCell>
@@ -79,8 +81,7 @@ export const DataScreen = () => {
                   text: t("general.rebuild_database.button"),
                   style: "destructive",
                   onPress: async () => {
-                    const dbPath = getDbPath()
-                    await FileSystem.deleteAsync(dbPath)
+                    scheduleLocalDataReset()
                     await reloadApp("Clear Sqlite Data")
                   },
                 },

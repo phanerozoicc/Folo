@@ -1,8 +1,9 @@
 import type { Command } from "commander"
 
 import { parseNonNegativeInt, parseView, viewHelp } from "../args"
-import { runCommand } from "../command"
+import { runCommand, toChangeResult } from "../command"
 import { CLIError } from "../output"
+import { toListRow } from "../table-views"
 
 interface ListCreateOptions {
   title: string
@@ -31,10 +32,14 @@ export const registerListCommand = (program: Command) => {
     .command("ls")
     .description("List my lists")
     .action(async function (this: Command) {
-      await runCommand(this, async ({ client }) => {
-        const response = await client.api.lists.list({})
-        return response.data
-      })
+      await runCommand(
+        this,
+        async ({ client }) => {
+          const response = await client.api.lists.list({})
+          return response.data
+        },
+        { table: (lists) => lists.map(toListRow) },
+      )
     })
 
   listCommand
@@ -103,7 +108,7 @@ export const registerListCommand = (program: Command) => {
           image: options.image,
         })
 
-        return response.data
+        return toChangeResult(response)
       })
     })
 
@@ -114,7 +119,7 @@ export const registerListCommand = (program: Command) => {
     .action(async function (this: Command, listId: string) {
       await runCommand(this, async ({ client }) => {
         const response = await client.api.lists.delete({ listId })
-        return response.data
+        return toChangeResult(response)
       })
     })
 
@@ -144,7 +149,7 @@ export const registerListCommand = (program: Command) => {
           listId,
           feedId: options.feed,
         })
-        return response.data
+        return toChangeResult(response)
       })
     })
 }

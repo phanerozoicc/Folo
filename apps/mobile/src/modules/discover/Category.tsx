@@ -4,7 +4,7 @@ import { Image } from "expo-image"
 import { LinearGradient } from "expo-linear-gradient"
 import { memo, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Platform, Pressable, StyleSheet, View } from "react-native"
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from "react-native"
 import { useColor } from "react-native-uikit-colors"
 
 import { Grid } from "@/src/components/ui/grid"
@@ -18,10 +18,14 @@ import { Recommendations } from "@/src/modules/discover/Recommendations"
 import { DiscoverSettingsScreen } from "@/src/screens/(modal)/DiscoverSettingsScreen"
 import { RecommendationCategoryScreen } from "@/src/screens/(stack)/recommendation/RecommendationCategoryScreen"
 
+import { getCategoryGridColumns } from "./category-columns"
+
 export const Category = () => {
   const { t } = useTranslation("common")
+  const { t: tSettings } = useTranslation("settings")
   const navigation = useNavigation()
   const label = useColor("label")
+  const columns = getCategoryGridColumns(useWindowDimensions().width)
   return (
     <>
       <View className="mt-4 flex-row items-center justify-between pb-1 pl-6 pr-5 pt-4">
@@ -34,6 +38,8 @@ export const Category = () => {
         <ItemPressable
           className="rounded-lg p-1"
           itemStyle={ItemPressableStyle.UnStyled}
+          accessibilityRole="button"
+          accessibilityLabel={tSettings("discoverFilters.title")}
           onPress={() => {
             navigation.presentControllerView(DiscoverSettingsScreen)
           }}
@@ -42,7 +48,7 @@ export const Category = () => {
         </ItemPressable>
       </View>
 
-      <Grid columns={2} gap={12} className="p-4">
+      <Grid columns={columns} gap={12} className="p-4">
         {RSSHubCategories.map((category) => (
           <CategoryItem key={category} category={category} />
         ))}
@@ -117,9 +123,17 @@ const CategoryItem = memo(({ category }: { category: RSSHubCategory }) => {
         className="rounded-2xl p-4"
         style={styles.cardItem}
       >
+        {/* The emoji sits above the name, so a long name cannot run into it */}
         <View className="flex-1">
           <CategoryEmoji emoji={emoji} />
-          <Text className="absolute bottom-0 left-2 text-lg font-bold text-white">{name}</Text>
+          {/* A margin, not padding: Android fits the font to the view's width, padding included */}
+          <Text
+            className="ml-2 text-lg font-bold text-white"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
+            {name}
+          </Text>
         </View>
       </LinearGradient>
     </Pressable>
@@ -129,18 +143,15 @@ const styles = StyleSheet.create({
   cardItem: {
     aspectRatio: 16 / 9,
   },
+  // Takes the height the name leaves; on a small card the emoji shrinks to fit it
   emojiContainer: {
-    position: "absolute",
-    right: 8,
-    top: 8,
-    width: 56,
-    height: 56,
-    alignItems: "center",
-    justifyContent: "center",
+    flex: 1,
+    alignItems: "flex-end",
+    paddingHorizontal: 8,
   },
   emojiText: {
-    fontSize: 40,
-    lineHeight: 48,
+    fontSize: 32,
+    lineHeight: 40,
     textAlign: "center",
     ...(Platform.OS === "android"
       ? {
@@ -149,7 +160,8 @@ const styles = StyleSheet.create({
       : {}),
   },
   emojiImage: {
-    width: 40,
-    height: 40,
+    flex: 1,
+    aspectRatio: 1,
+    maxHeight: 40,
   },
 })

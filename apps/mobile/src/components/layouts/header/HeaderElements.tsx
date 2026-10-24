@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { CheckLineIcon } from "@/src/icons/check_line"
 import { useCanBack, useCanDismiss } from "@/src/lib/navigation/hooks"
 import { StackScreenHeaderPortal } from "@/src/lib/navigation/StackScreenHeaderPortal"
+import { useHeaderWindowControlsInsets } from "@/src/lib/window-controls"
 import { useColor } from "@/src/theme/colors"
 
 import { PlatformActivityIndicator } from "../../ui/loading/PlatformActivityIndicator"
@@ -23,12 +24,14 @@ export const HeaderSubmitButton = ({
   isLoading,
   testID,
 }: ModalHeaderSubmitButtonProps) => {
+  const { t } = useTranslation("common")
   const label = useColor("label")
   return (
     <UINavigationHeaderActionButton
       onPress={onPress}
       disabled={!isValid || isLoading}
       testID={testID}
+      accessibilityLabel={t("words.submit")}
     >
       {isLoading ? (
         <PlatformActivityIndicator size="small" color={withOpacity(label, 0.5)} />
@@ -75,6 +78,7 @@ export const HeaderSubmitTextButton = ({
 }
 export const HeaderCloseOnly = () => {
   const insets = useSafeAreaInsets()
+  const windowControlsInsets = useHeaderWindowControlsInsets()
   const canDismiss = useCanDismiss()
   const canBack = useCanBack()
   return (
@@ -84,7 +88,7 @@ export const HeaderCloseOnly = () => {
         className="absolute"
         style={{
           top: insets.top,
-          left: insets.left,
+          left: insets.left + windowControlsInsets.left,
         }}
       >
         <DefaultHeaderBackButton canGoBack={canBack} canDismiss={canDismiss} />

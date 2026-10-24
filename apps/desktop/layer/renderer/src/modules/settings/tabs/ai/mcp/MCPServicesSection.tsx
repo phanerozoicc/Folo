@@ -3,6 +3,7 @@ import { Label } from "@follow/components/ui/label/index.jsx"
 import { Switch } from "@follow/components/ui/switch/index.jsx"
 import type { WithOptimistic } from "@follow/hooks"
 import { createOptimisticConfig, useOptimisticMutation } from "@follow/hooks"
+import { IN_ELECTRON } from "@follow/shared/constants"
 import type { MCPService } from "@follow/shared/settings/interface"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import * as React from "react"
@@ -35,6 +36,7 @@ export const MCPServicesSection = () => {
   const dialog = useDialog()
 
   const shouldWindowFocusRefetchRef = React.useRef(false)
+  const enabledSwitchId = React.useId()
 
   // Reusable OAuth authorization handler using dialog
   const handleOAuthAuthorization = async (authorizationUrl: string, _connectionId?: string) => {
@@ -53,11 +55,12 @@ export const MCPServicesSection = () => {
         "width=600,height=700,scrollbars=yes,resizable=yes,popup=yes",
       )
 
-      if (!popup) {
+      // The desktop app hands web pages to the system browser, so it never returns a window
+      if (!popup && !IN_ELECTRON) {
         toast.error(t("integration.mcp.service.popup_blocked"))
-      } else {
-        shouldWindowFocusRefetchRef.current = true
+        return
       }
+      shouldWindowFocusRefetchRef.current = true
     }
   }
 
@@ -72,13 +75,16 @@ export const MCPServicesSection = () => {
   const {
     data: mcpServices = [],
     isLoading,
+    isFetching,
     error,
+    errorUpdatedAt,
     refetch,
   } = useQuery({
     queryKey: mcpQueryKeys.connections(),
     queryFn: fetchMCPConnections,
     enabled: mcpEnabled,
-    refetchInterval: 30_000,
+    // Stop polling while the endpoint fails; refresh and window focus still retry
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
     retry: 2,
   })
 
@@ -341,23 +347,25 @@ export const MCPServicesSection = () => {
     toggleConnectionMutation.mutate({ connectionId: id, enabled })
   }
 
-  // Show error message if query failed
+  // Show error message once per failed load, not on every re-render with the same error
   React.useEffect(() => {
-    if (error) {
-      toast.error(t("integration.mcp.services.load_failed"))
-      console.error("Failed to load MCP connections:", error)
-    }
-  }, [error, t])
+    if (!errorUpdatedAt || !error) return
+    toast.error(t("integration.mcp.services.load_failed"))
+    console.error("Failed to load MCP connections:", error)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorUpdatedAt])
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <div className="space-y-1">
-            <Label className="text-sm font-medium text-text">{t("integration.mcp.enabled")}</Label>
+            <Label htmlFor={enabledSwitchId} className="text-sm font-medium text-text">
+              {t("integration.mcp.enabled")}
+            </Label>
             <div className="text-xs text-text-secondary">{t("integration.mcp.description")}</div>
           </div>
-          <Switch checked={mcpEnabled} onCheckedChange={setMCPEnabled} />
+          <Switch id={enabledSwitchId} checked={mcpEnabled} onCheckedChange={setMCPEnabled} />
         </div>
       </div>
 
@@ -372,10 +380,10 @@ export const MCPServicesSection = () => {
                 variant="ghost"
                 size="sm"
                 onClick={() => refetch()}
-                disabled={isLoading}
+                disabled={isFetching}
                 title={t("integration.mcp.services.refresh")}
               >
-                {isLoading ? (
+                {isFetching ? (
                   <i className="i-mgc-loading-3-cute-re size-4 animate-spin" />
                 ) : (
                   <i className="i-mgc-refresh-2-cute-re size-4" />

@@ -39,10 +39,15 @@ import { z } from "zod"
 
 import { useIsPaymentEnabled } from "~/atoms/server-configs"
 import { Autocomplete } from "~/components/ui/auto-completion"
-import { useCurrentModal, useIsInModal } from "~/components/ui/modal/stacked/hooks"
+import {
+  useCurrentModal,
+  useIsInModal,
+  useModalUnsavedChanges,
+} from "~/components/ui/modal/stacked/hooks"
 import { getRouteParams } from "~/hooks/biz/useRouteParams"
 import { useI18n } from "~/hooks/common"
-import { toastFetchError } from "~/lib/error-parser"
+import { useFormHasChanges } from "~/hooks/common/useFormHasChanges"
+import { getFetchErrorMessage, toastFetchError } from "~/lib/error-parser"
 import { useSettingModal } from "~/modules/settings/modal/useSettingModal"
 import { feed as feedQuery, useFeedQuery } from "~/queries/feed"
 
@@ -175,6 +180,10 @@ export const FeedForm: Component<{
               <div className="center grow flex-col gap-3">
                 <i className="i-mgc-close-cute-re size-7 text-red" />
                 <p>{t("feed_form.error_fetching_feed")}</p>
+                {/* Why, such as an address that is not a feed */}
+                <p className="cursor-text select-text break-all px-8 text-center text-sm text-text-secondary">
+                  {getFetchErrorMessage(feedQuery.error)}
+                </p>
               </div>
             )
           }
@@ -204,6 +213,12 @@ export const FeedForm: Component<{
       <div ref={placeholderRef} />
     </div>
   )
+}
+
+// The All view lists every view, but a feed can't be followed into it
+const getDefaultFollowView = () => {
+  const { view } = getRouteParams()
+  return view === FeedViewType.All ? FeedViewType.Articles : view
 }
 
 const FeedInnerForm = ({
@@ -243,45 +258,59 @@ const FeedInnerForm = ({
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: defaultValues || {
-      view: getRouteParams().view.toString() || FeedViewType.Articles.toString(),
+      view: getDefaultFollowView().toString(),
     },
   })
 
   const { setClickOutSideToDismiss, dismiss } = useCurrentModal()
 
+  const hasUnsavedChanges = useFormHasChanges(form)
   useEffect(() => {
-    setClickOutSideToDismiss(!form.formState.isDirty)
-  }, [form.formState.isDirty, setClickOutSideToDismiss])
+    setClickOutSideToDismiss(!hasUnsavedChanges)
+  }, [hasUnsavedChanges, setClickOutSideToDismiss])
+  useModalUnsavedChanges(hasUnsavedChanges)
 
   useEffect(() => {
-    if (subscription) {
-      form.setValue("view", `${subscription?.view}`)
-      subscription?.category && form.setValue("category", subscription.category)
-      typeof subscription.isPrivate === "boolean" &&
-        form.setValue("isPrivate", subscription.isPrivate)
-      typeof subscription.hideFromTimeline === "boolean" &&
-        form.setValue("hideFromTimeline", subscription.hideFromTimeline)
-      subscription?.title && form.setValue("title", subscription.title)
-    }
+    if (!subscription) return
+    // The form starts from the followed settings, so only real edits count as unsaved changes.
+    // Fields the user already changed keep the user's value.
+    form.reset(
+      {
+        ...form.formState.defaultValues,
+        view: `${subscription.view}`,
+        ...(subscription.category ? { category: subscription.category } : {}),
+        ...(typeof subscription.isPrivate === "boolean"
+          ? { isPrivate: subscription.isPrivate }
+          : {}),
+        ...(typeof subscription.hideFromTimeline === "boolean"
+          ? { hideFromTimeline: subscription.hideFromTimeline }
+          : {}),
+        ...(subscription.title ? { title: subscription.title } : {}),
+      },
+      { keepDirtyValues: true },
+    )
   }, [form, subscription])
 
   useEffect(() => {
-    if (
-      typeof analytics?.view === "number" &&
-      !subscription &&
-      typeof defaultValues?.view !== "number"
-    ) {
-      form.setValue("view", `${analytics.view}`)
+    if (typeof analytics?.view === "number" && !subscription && !defaultValues?.view) {
+      // The suggested view is a starting value, not a change of the user's
+      form.reset(
+        { ...form.formState.defaultValues, view: `${analytics.view}` },
+        { keepDirtyValues: true },
+      )
     }
   }, [analytics, defaultValues?.view, form, subscription])
 
   const followMutation = useMutation({
-    mutationFn: async (values: z.infer<typeof formSchema>) => {
+    // Whether the form edits the subscription is decided when it is sent: a follow stores the
+    // subscription before the request settles, so by then the form reads as followed
+    mutationFn: async ({ isEdit, ...values }: z.infer<typeof formSchema> & { isEdit: boolean }) => {
       const userId = whoami()?.id || ""
       const body = {
         url: feed.url,
         view: Number.parseInt(values.view),
-        category: values.category,
+        // A name of only spaces would make a folder without a name
+        category: values.category?.trim() || null,
         isPrivate: values.isPrivate || false,
         hideFromTimeline: values.hideFromTimeline,
         title: values.title,
@@ -291,18 +320,18 @@ const FeedInnerForm = ({
         listId: undefined,
       } as const
 
-      if (isSubscribed) {
+      if (isEdit) {
         return subscriptionSyncService.edit(body)
       } else {
         return subscriptionSyncService.subscribe(body)
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, { isEdit }) => {
       const feedId = feed.id
       if (feedId) {
         feedQuery.byId({ id: feedId }).invalidate()
       }
-      toast(isSubscribed ? t("feed_form.updated") : t("feed_form.followed"), {
+      toast(isEdit ? t("feed_form.updated") : t("feed_form.followed"), {
         duration: 1000,
       })
 
@@ -312,9 +341,14 @@ const FeedInnerForm = ({
       toastFetchError(err)
     },
   })
+  // A form sent to follow keeps saying so until it closes
+  const isEditing =
+    (followMutation.isPending || followMutation.isSuccess) && followMutation.variables
+      ? followMutation.variables.isEdit
+      : isSubscribed
 
   function onSubmit(values: z.infer<typeof formSchema>) {
-    followMutation.mutate(values)
+    followMutation.mutate({ ...values, isEdit: isSubscribed })
   }
 
   const t = useI18n()
@@ -367,6 +401,7 @@ const FeedInnerForm = ({
                       data-testid="feed-form-title-input"
                       placeholder={feed.title || undefined}
                       {...field}
+                      value={field.value ?? ""}
                     />
                     <Button
                       buttonClassName="shrink-0"
@@ -399,6 +434,7 @@ const FeedInnerForm = ({
                       maxHeight={window.innerHeight < 600 ? 120 : 240}
                       suggestions={suggestions}
                       {...(field as any)}
+                      value={field.value ?? ""}
                       onSuggestionSelected={(suggestion) => {
                         if (suggestion) {
                           field.onChange(suggestion.value)
@@ -427,7 +463,8 @@ const FeedInnerForm = ({
                   <FormControl>
                     <Switch
                       className="shrink-0"
-                      checked={field.value}
+                      // Off until the form knows the followed setting, so the switch stays controlled
+                      checked={field.value ?? false}
                       onCheckedChange={field.onChange}
                       disabled={disabledForRole}
                     />
@@ -454,7 +491,7 @@ const FeedInnerForm = ({
                   <FormControl>
                     <Switch
                       className="shrink-0"
-                      checked={field.value}
+                      checked={field.value ?? false}
                       onCheckedChange={field.onChange}
                       disabled={disabledForRole}
                     />
@@ -484,7 +521,7 @@ const FeedInnerForm = ({
       </Form>
       <RootPortal to={placeholderRef.current}>
         <div className="flex items-center justify-end gap-4 pt-2">
-          {isSubscribed && (
+          {isEditing && (
             <Button
               disabled={!isLoggedIn}
               data-testid="feed-form-cancel"
@@ -504,7 +541,7 @@ const FeedInnerForm = ({
             type="submit"
             isLoading={followMutation.isPending}
           >
-            {isSubscribed ? t("feed_form.update") : t("feed_form.follow")}
+            {isEditing ? t("feed_form.update") : t("feed_form.follow")}
           </Button>
         </div>
       </RootPortal>

@@ -1,17 +1,12 @@
 import { useEntry } from "@follow/store/entry/hooks"
 import { usePrefetchSummary } from "@follow/store/summary/hooks"
+import { cn } from "@follow/utils/utils"
 import { useAtomValue } from "jotai"
 import { useTranslation } from "react-i18next"
 
 import { useShowAISummary } from "~/atoms/ai-summary"
 import { useEntryIsInReadabilitySuccess } from "~/atoms/readability"
-import {
-  AIChatPanelStyle,
-  setAIPanelVisibility,
-  useAIChatPanelStyle,
-  useAIPanelVisibility,
-  useOwnAIActive,
-} from "~/atoms/settings/ai"
+import { setAIPanelVisibility, useAIPanelVisibility, useOwnAIActive } from "~/atoms/settings/ai"
 import { useActionLanguage } from "~/atoms/settings/general"
 import { AISummaryCardBase } from "~/components/ui/ai-summary-card"
 import { ownAISummaryStreamAtom } from "~/lib/own-ai"
@@ -26,7 +21,6 @@ export function AISummary({ entryId }: { entryId: string }) {
   const actionLanguage = useActionLanguage()
 
   // AI Chat panel state
-  const aiChatPanelStyle = useAIChatPanelStyle()
   const isAIPanelVisible = useAIPanelVisibility()
 
   const summary = usePrefetchSummary({
@@ -42,12 +36,9 @@ export function AISummary({ entryId }: { entryId: string }) {
   const displayContent = summary.data || streamingText
   const isLoading = summary.isLoading && !displayContent
 
-  // Show Ask AI button when:
-  // 1. Panel style is floating AND panel is not visible
-  // 2. OR panel style is fixed (since fixed panel can be toggled)
-  const shouldShowAskAI =
-    (aiChatPanelStyle === AIChatPanelStyle.Floating && !isAIPanelVisible) ||
-    aiChatPanelStyle === AIChatPanelStyle.Fixed
+  // Ask AI only opens the AI panel, so it is left out while the panel is open, including a fixed
+  // panel next to the entry once its chat has messages
+  const shouldShowAskAI = !isAIPanelVisible
 
   const handleAskAI = () => {
     setAIPanelVisibility(true)
@@ -61,7 +52,8 @@ export function AISummary({ entryId }: { entryId: string }) {
     <AISummaryCardBase
       content={displayContent}
       isLoading={isLoading}
-      className="my-8"
+      // Only a finished summary belongs in an exported PDF, not its loading, upgrade or empty state
+      className={cn("my-8", !displayContent && "print:hidden")}
       title={
         ownAiActive ? `${t("entry_content.ai_summary")} · Own AI` : t("entry_content.ai_summary")
       }

@@ -1,8 +1,9 @@
 import type { Command } from "commander"
 
-import { runCommand } from "../command"
+import { runCommand, toChangeResult } from "../command"
 
-const isURL = (value: string) => value.startsWith("http://") || value.startsWith("https://")
+// Any scheme counts, as subscription list shows the feeds of RSSHub instances as rsshub:// URLs
+const isURL = (value: string) => /^[a-z][\d+.a-z-]*:\/\//i.test(value)
 
 export const registerFeedCommand = (program: Command) => {
   const feedCommand = program.command("feed").description("Manage feed data")
@@ -27,7 +28,7 @@ export const registerFeedCommand = (program: Command) => {
     .action(async function (this: Command, feedId: string) {
       await runCommand(this, async ({ client }) => {
         const response = await client.api.feeds.refresh({ id: feedId })
-        return response.data
+        return toChangeResult(response)
       })
     })
 

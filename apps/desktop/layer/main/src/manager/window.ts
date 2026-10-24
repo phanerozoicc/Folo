@@ -9,8 +9,9 @@ import { BrowserWindow, screen, shell } from "electron"
 import type { Event } from "electron/main"
 import path from "pathe"
 
-import { isMacOS, isWindows, isWindows11 } from "~/env"
+import { isMacOS, isWindows } from "~/env"
 import { filePathToAppUrl, getIconPath } from "~/helper"
+import { setRendererReady } from "~/lib/deep-link"
 import { t } from "~/lib/i18n"
 import { store } from "~/lib/store"
 import { getTrayConfig } from "~/lib/tray"
@@ -154,9 +155,41 @@ class WindowManagerStatic {
       await confirmAndOpenExternalProtocol(url)
     }
 
-    // Handle main window external links
+    // The window only shows the app's own pages. Any other page would run with the app's Node
+    // integration, so web pages open in the browser instead.
+    const rendererUrl = this.getRendererUrl()
+    const handleMainFrameNavigation = async (e: Event, url: string) => {
+      let target: URL
+      try {
+        target = new URL(url)
+      } catch {
+        logger.warn("Blocked navigation to an invalid URL", { url })
+        e.preventDefault()
+        return
+      }
+      // E.g. a reload
+      if (target.protocol === rendererUrl.protocol && target.host === rendererUrl.host) return
+
+      const protocol = target.protocol.slice(0, -1)
+      if (protocol === "http" || protocol === "https") {
+        e.preventDefault()
+        void shell.openExternal(url)
+        return
+      }
+      if (protocol === "app" || protocol === "file") {
+        logger.warn("Blocked navigation to a local page", { url })
+        e.preventDefault()
+        return
+      }
+      // Chromium hands deep links and editor links to the system, and the page stays
+      if (isIgnoredProtocol(protocol)) return
+
+      e.preventDefault()
+      await confirmAndOpenExternalProtocol(url)
+    }
+
     window.webContents.on("will-navigate", (e, url) => {
-      void handleExternalProtocol(e, url)
+      void handleMainFrameNavigation(e, url)
     })
 
     // Handle webview external links
@@ -176,6 +209,14 @@ class WindowManagerStatic {
     }
 
     this.bindWindowStateEvents(window)
+  }
+
+  /** Where the app's pages load from: the dev server, or the bundle behind the app protocol */
+  private getRendererUrl() {
+    if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
+      return new URL(process.env["ELECTRON_RENDERER_URL"])
+    }
+    return new URL(filePathToAppUrl("/"))
   }
 
   private setupDevToolsFont(window: BrowserWindow) {
@@ -238,30 +279,25 @@ class WindowManagerStatic {
     })
   }
 
+  /**
+   * Remember where the window is. A maximized window keeps the size it returns to, along with
+   * the fact that it was maximized.
+   */
+  saveMainWindowState = (window: BrowserWindow) => {
+    const isMaximized = window.isMaximized()
+    const bounds = isMaximized ? window.getNormalBounds() : window.getBounds()
+    store.set(this.windowStateStoreKey, {
+      width: bounds.width,
+      height: bounds.height,
+      x: bounds.x,
+      y: bounds.y,
+      isMaximized,
+    })
+  }
+
   private bindMainWindowCloseHandlers(window: BrowserWindow) {
     window.on("close", () => {
-      if (isWindows11) {
-        const windowStoreKey = Symbol.for("maximized")
-        if (window[windowStoreKey]) {
-          const stored = window[windowStoreKey]
-          store.set(this.windowStateStoreKey, {
-            width: stored.size[0],
-            height: stored.size[1],
-            x: stored.position[0],
-            y: stored.position[1],
-          })
-
-          return
-        }
-      }
-
-      const bounds = window.getBounds()
-      store.set(this.windowStateStoreKey, {
-        width: bounds.width,
-        height: bounds.height,
-        x: bounds.x,
-        y: bounds.y,
-      })
+      this.saveMainWindowState(window)
     })
 
     window.on("close", (event) => {
@@ -282,6 +318,12 @@ class WindowManagerStatic {
       } else {
         this.windows.mainWindow = null
       }
+    })
+
+    // Brought back from the Dock, the tray or another launch. The renderer refreshes what went
+    // stale while the window was hidden for long, measured from the close above.
+    window.on("show", () => {
+      callWindowExpose(window).onWindowShow()
     })
   }
 
@@ -382,8 +424,20 @@ class WindowManagerStatic {
     x?: number
     y?: number
   }) {
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const { workArea } = primaryDisplay
+    // The display the window was on, as long as it is still connected, rather than always the
+    // primary one
+    const savedX = windowState?.x
+    const savedY = windowState?.y
+    const display =
+      savedX !== undefined && savedY !== undefined
+        ? screen.getDisplayMatching({
+            x: savedX,
+            y: savedY,
+            width: windowState?.width ?? WindowManagerStatic.mainWindowDefaultSize.width,
+            height: windowState?.height ?? WindowManagerStatic.mainWindowDefaultSize.height,
+          })
+        : screen.getPrimaryDisplay()
+    const { workArea } = display
 
     const maxWidth = workArea.width
     const maxHeight = workArea.height
@@ -419,6 +473,7 @@ class WindowManagerStatic {
           height?: number
           x?: number
           y?: number
+          isMaximized?: boolean
         }
       | undefined
     const { width, height, x, y, maxWidth, maxHeight } =
@@ -433,7 +488,18 @@ class WindowManagerStatic {
       minHeight: Math.min(this.config.minWindowSize.height, maxHeight),
     })
 
+    // Once shown: maximizing a hidden window shows it before the renderer is ready. macOS
+    // ignores a maximize while the window is still being ordered in, so it waits a tick.
+    // Maximizing a hidden window would show it before the renderer is ready, so it happens when
+    // the window is first shown
+    if (windowState?.isMaximized) {
+      this.maximizeOnFirstShow.add(window)
+    }
+
     this.bindMainWindowCloseHandlers(window)
+    // Deep links wait while the renderer loads, until it reports that it is ready again
+    window.webContents.on("did-navigate", () => setRendererReady(false))
+    window.on("closed", () => setRendererReady(false))
 
     this.windows.mainWindow = window
 
@@ -447,18 +513,27 @@ class WindowManagerStatic {
       if (this.windows.mainWindow.isMinimized()) {
         this.windows.mainWindow.restore()
       }
-      this.windows.mainWindow.show()
+      this.showMainWindow(this.windows.mainWindow)
 
       callWindowExpose(this.windows.mainWindow).showSetting(path)
       return
     } else {
       this.windows.mainWindow = this.createMainWindow()
-      this.windows.mainWindow.show()
+      this.showMainWindow(this.windows.mainWindow)
       callWindowExpose(this.windows.mainWindow).showSetting(path)
     }
   }
 
   getMainWindow = () => this.windows.mainWindow
+
+  private maximizeOnFirstShow = new WeakSet<BrowserWindow>()
+
+  /** Shows the main window, maximized the first time if it was maximized when the app quit. */
+  showMainWindow = (window = this.windows.mainWindow) => {
+    if (!window || window.isDestroyed()) return
+    window.show()
+    if (this.maximizeOnFirstShow.delete(window)) window.maximize()
+  }
 
   getMainWindowOrCreate = () => {
     if (!this.windows.mainWindow) {

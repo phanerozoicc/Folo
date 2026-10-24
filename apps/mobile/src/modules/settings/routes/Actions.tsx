@@ -5,11 +5,15 @@ import {
   useUpdateActionsMutation,
 } from "@follow/store/action/hooks"
 import type { ActionModel } from "@follow/store/action/store"
-import { actionActions } from "@follow/store/action/store"
-import { useCallback } from "react"
+import {
+  actionActions,
+  actionSyncService,
+  isActionRulesConflictError,
+} from "@follow/store/action/store"
+import { useCallback, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import type { ListRenderItem } from "react-native"
-import { StyleSheet, View } from "react-native"
+import { Alert, StyleSheet, View } from "react-native"
 import Animated, { LinearTransition } from "react-native-reanimated"
 import { useColors } from "react-native-uikit-colors"
 
@@ -22,6 +26,8 @@ import {
 } from "@/src/components/layouts/views/SafeNavigationScrollView"
 import {
   GroupedInformationCell,
+  GroupedInsetActivityIndicatorCell,
+  GroupedInsetListBaseCell,
   GroupedInsetListCard,
   GroupedPlainButtonCell,
 } from "@/src/components/ui/grouped/GroupedList"
@@ -33,6 +39,7 @@ import { Book6CuteReIcon } from "@/src/icons/book_6_cute_re"
 import { Magic2CuteFiIcon } from "@/src/icons/magic_2_cute_fi"
 import { toastFetchError } from "@/src/lib/error-parser"
 import { useNavigation } from "@/src/lib/navigation/hooks"
+import { useSetScreenOptions } from "@/src/lib/navigation/ScreenOptionsContext"
 import { toast } from "@/src/lib/toast"
 import { accentColor } from "@/src/theme/colors"
 
@@ -41,9 +48,22 @@ import { EditRuleScreen } from "./EditRule"
 export const ActionsScreen = () => {
   const { t } = useTranslation("settings")
   const { t: tCommon } = useTranslation("common")
-  const { isLoading } = usePrefetchActions()
+  const { isLoading, isError, isFetching, refetch } = usePrefetchActions()
   const rules = useActionRules()
   const isDirty = useIsActionDataDirty()
+  // Saving sends every rule, so editing an empty list here would wipe the server's rules
+  const loadFailed = isError && !actionActions.isLoaded()
+  // Leaving by a swipe would skip the unsaved changes prompt of the back button
+  const setScreenOptions = useSetScreenOptions()
+  useEffect(() => {
+    setScreenOptions({ gestureEnabled: !isDirty })
+  }, [isDirty, setScreenOptions])
+  // Edits the user chose to leave behind must not stay in the store
+  useEffect(() => {
+    return () => {
+      actionActions.discardLocalEdits().catch(console.error)
+    }
+  }, [])
   return (
     <SafeNavigationScrollView
       Header={
@@ -82,28 +102,48 @@ export const ActionsScreen = () => {
         </GroupedInsetListCard>
       </View>
 
-      <View className="mt-6">
-        <GroupedInsetListCard>
-          {rules.length > 0 ? (
-            <SwipeableGroupProvider>
-              <Animated.FlatList
-                keyExtractor={keyExtractor}
-                itemLayoutAnimation={LinearTransition}
-                scrollEnabled={false}
-                data={rules}
-                renderItem={ListItemCell}
-                ItemSeparatorComponent={ItemSeparatorComponent}
-              />
-            </SwipeableGroupProvider>
-          ) : isLoading && rules.length === 0 ? (
-            <View className="my-4">
-              <PlatformActivityIndicator />
-            </View>
-          ) : null}
-        </GroupedInsetListCard>
-        <NewRuleButton />
-      </View>
+      {loadFailed ? (
+        <ActionLoadError isRetrying={isFetching} onRetry={() => void refetch()} />
+      ) : (
+        <View className="mt-6">
+          <GroupedInsetListCard>
+            {rules.length > 0 ? (
+              <SwipeableGroupProvider>
+                <Animated.FlatList
+                  keyExtractor={keyExtractor}
+                  itemLayoutAnimation={LinearTransition}
+                  scrollEnabled={false}
+                  data={rules}
+                  renderItem={ListItemCell}
+                  ItemSeparatorComponent={ItemSeparatorComponent}
+                />
+              </SwipeableGroupProvider>
+            ) : isLoading && rules.length === 0 ? (
+              <View className="my-4">
+                <PlatformActivityIndicator />
+              </View>
+            ) : null}
+          </GroupedInsetListCard>
+          <NewRuleButton />
+        </View>
+      )}
     </SafeNavigationScrollView>
+  )
+}
+const ActionLoadError = ({ isRetrying, onRetry }: { isRetrying: boolean; onRetry: () => void }) => {
+  const { t } = useTranslation("settings")
+  const { t: tCommon } = useTranslation("common")
+  return (
+    <GroupedInsetListCard className="mt-6">
+      <GroupedInsetListBaseCell>
+        <Text className="flex-1 text-sm text-secondary-label">{t("actions.load_failed")}</Text>
+      </GroupedInsetListBaseCell>
+      {isRetrying ? (
+        <GroupedInsetActivityIndicatorCell />
+      ) : (
+        <GroupedPlainButtonCell label={tCommon("retry")} onPress={onRetry} />
+      )}
+    </GroupedInsetListCard>
   )
 }
 const NewRuleButton = () => {
@@ -132,22 +172,43 @@ const SaveRuleButton = ({ disabled }: { disabled?: boolean }) => {
       toast.success(t("actions.saveSuccess"))
     },
     onError(error) {
-      toastFetchError(error)
+      if (!isActionRulesConflictError(error)) {
+        toastFetchError(error)
+        return
+      }
+      // The rules were changed elsewhere since they were loaded, so the save was refused
+      Alert.alert(t("actions.conflict.title"), t("actions.conflict.message"), [
+        { text: t("actions.conflict.keep_editing"), style: "cancel" },
+        {
+          text: t("actions.conflict.overwrite"),
+          style: "destructive",
+          onPress: () => mutate({ overwrite: true }),
+        },
+        {
+          text: t("actions.conflict.reload"),
+          onPress: () => {
+            actionSyncService.fetchRules().catch((fetchError: Error) => {
+              toastFetchError(fetchError)
+            })
+          },
+        },
+      ])
     },
   })
   return (
     <HeaderSubmitTextButton
       label={t("actions.save")}
       isValid={!disabled}
-      onPress={mutate}
+      onPress={() => mutate()}
       isLoading={isPending}
     />
   )
 }
 const ItemSeparatorComponent = () => {
   return (
+    // No flex-1: as the only flexible child of its list cell it lost its height once a row changed
     <View
-      className="ml-24 flex-1 bg-opaque-separator/70"
+      className="ml-24 bg-opaque-separator/70"
       collapsable={false}
       style={styles.itemSeparator}
     />

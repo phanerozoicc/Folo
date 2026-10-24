@@ -1,12 +1,51 @@
-import { FollowAPIError } from "@follow-app/client-sdk"
+import type { AuthClientError } from "@follow/utils/auth-error"
+import { describeAuthError } from "@follow/utils/auth-error"
+import { ExceptionCodeMap, FollowAPIError, FollowTimeoutError } from "@follow-app/client-sdk"
 import { t } from "i18next"
 import { FetchError } from "ofetch"
 
 import { getIsPaymentEnabled } from "@/src/atoms/server-configs"
 import { showUpgradeRequiredDialog } from "@/src/modules/dialogs/UpgradeRequiredDialog"
 
-import { sanitizeErrorMessage } from "./error-message"
+import { isConnectionFailure } from "./network-error"
 import { toast } from "./toast"
+
+/**
+ * The code of the server's answer, which the error locales translate. `code` names some errors
+ * the SDK's own way, such as AUTH_REQUIRED for a refused session.
+ */
+const getServerCode = (error: FollowAPIError) => {
+  if (error.serverCode !== undefined) return error.serverCode
+  const code = Number(error.code)
+  return error.code && !Number.isNaN(code) ? code : undefined
+}
+
+// A refused session asks to sign in, whether the server said 1008 (a guest's change) or 1000
+// (no session): the translation of 1000 is a bare "Unauthorized" that says nothing to do.
+const SIGN_IN_REQUIRED_MESSAGE_KEY = "errors:1008"
+const SIGN_IN_REQUIRED_CODES = new Set<number | undefined>([
+  ExceptionCodeMap.AuthError,
+  ExceptionCodeMap.FakeUserReadOnly,
+  // A 401 that is not the API's own answer
+  undefined,
+])
+const isSignInRequired = (error: Error) =>
+  error instanceof FollowAPIError &&
+  error.status === 401 &&
+  SIGN_IN_REQUIRED_CODES.has(getServerCode(error))
+
+/** What to tell the user about an error the auth client resolved with, translated where it can */
+export const getAuthErrorMessage = (error: AuthClientError | null | undefined) =>
+  describeAuthError(error, (key) => t(key, { ns: "common" }))
+
+// i18next answers a missing key with the key without its namespace, such as "1000"
+const translateErrorCode = (code: unknown, fallback: string) => {
+  if (code == null) return fallback
+  const translated: unknown = t(`errors:${code}` as never)
+  return typeof translated === "string" && translated && translated !== `${code}`
+    ? translated
+    : fallback
+}
 
 export const getFetchErrorInfo = (
   error: Error,
@@ -19,33 +58,47 @@ export const getFetchErrorInfo = (
       const json = JSON.parse(error.response?._data)
 
       const { reason, code, message } = json
-      const i18nKey = `errors:${code}` as any
-      const i18nMessage = t(i18nKey) === i18nKey ? message : t(i18nKey)
+      const i18nMessage = translateErrorCode(code, message)
       return {
-        message: sanitizeErrorMessage(`${i18nMessage}${reason ? `: ${reason}` : ""}`),
+        message: `${i18nMessage}${reason ? `: ${reason}` : ""}`,
         code,
       }
     } catch {
-      return { message: sanitizeErrorMessage(error.message) }
+      return { message: error.message }
     }
   }
 
-  if (error instanceof FollowAPIError && error.code) {
-    const code = Number(error.code)
+  if (isSignInRequired(error)) {
+    return { message: t(SIGN_IN_REQUIRED_MESSAGE_KEY) }
+  }
+
+  // The server is reachable but answered too slowly; blaming the network would mislead
+  if (error instanceof FollowTimeoutError) {
+    return { message: t("common:app.request_timeout") }
+  }
+
+  if (error instanceof FollowAPIError) {
+    const code = getServerCode(error)
     try {
-      const i18nKey = `errors:${code}` as any
-      const i18nMessage = t(i18nKey) === i18nKey ? error.message : t(i18nKey)
       return {
-        message: sanitizeErrorMessage(i18nMessage),
+        message: translateErrorCode(code, error.message),
         code,
       }
     } catch {
-      return { message: sanitizeErrorMessage(error.message) }
+      return { message: error.message }
     }
   }
 
-  return { message: sanitizeErrorMessage(error.message) }
+  if (isConnectionFailure(error)) {
+    return { message: t("common:app.api_unreachable") }
+  }
+
+  return { message: error.message }
 }
+
+/** The server says what was asked for does not exist, so trying again cannot help */
+export const isNotFoundError = (error: unknown) =>
+  error instanceof FollowAPIError && error.status === 404
 
 export const getFetchErrorMessage = (error: Error) => {
   const { message } = getFetchErrorInfo(error)
@@ -59,8 +112,12 @@ export const createErrorToaster = (title?: string) => (err: Error) =>
   toastFetchError(err, { title })
 
 export const toastFetchError = (error: Error, { title: _title }: { title?: string } = {}) => {
-  const fallbackMessage = sanitizeErrorMessage(error.message)
+  const fallbackMessage = isConnectionFailure(error)
+    ? t("common:app.api_unreachable")
+    : error.message
   let message = fallbackMessage
+  // What the server said, kept next to the translation of its error code
+  let serverMessage = ""
   let _reason = ""
   let code: number | undefined
   let status: number | undefined
@@ -81,6 +138,7 @@ export const toastFetchError = (error: Error, { title: _title }: { title?: strin
         code = typeof _code === "number" ? _code : Number(_code)
       }
       message = typeof _message === "string" && _message.trim() ? _message : message
+      serverMessage = typeof _message === "string" ? _message : ""
       if (code != null) {
         const tValue = t(`errors:${code}` as any)
         if (tValue !== `${code}`) {
@@ -97,24 +155,21 @@ export const toastFetchError = (error: Error, { title: _title }: { title?: strin
   }
 
   if (error instanceof FollowAPIError) {
-    if (error.code) {
-      code = Number(error.code)
-    }
+    code = getServerCode(error)
     status = error.status ? Number(error.status) : status
+    serverMessage = error.message
     try {
-      if (error.code) {
-        const tValue = t(`errors:${code}` as any)
-        const i18nMessage = tValue === code?.toString() ? error.message : tValue
-        message = i18nMessage
-      } else {
-        message = fallbackMessage
-      }
+      message = code === undefined ? fallbackMessage : translateErrorCode(code, error.message)
     } catch {
       message = fallbackMessage
     }
-  }
 
-  message = sanitizeErrorMessage(message)
+    if (isSignInRequired(error)) {
+      message = t(SIGN_IN_REQUIRED_MESSAGE_KEY)
+    } else if (error instanceof FollowTimeoutError) {
+      message = t("common:app.request_timeout")
+    }
+  }
 
   // 2fa errors are handled by the form
   if (code === 4007 || code === 4008) {
@@ -137,9 +192,17 @@ export const toastFetchError = (error: Error, { title: _title }: { title?: strin
     return
   }
 
+  // Every request validation failure has this code; only the server's message names the field
+  const detail =
+    code === ExceptionCodeMap.UnprocessableContent && serverMessage && serverMessage !== message
+      ? serverMessage
+      : ""
+
   if (!_reason) {
     const title = _title || message || "Unknown error"
-    return toast.error(title)
+    // A title of the caller's own says what failed, so the server's answer still has to say why
+    const description = _title && !detail && message !== _title ? message : detail
+    return description ? toast.error(title, { description }) : toast.error(title)
   } else {
     return toast.error(message || _title || "Unknown error")
   }

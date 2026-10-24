@@ -1,6 +1,6 @@
 import type { FeedViewType } from "@follow/constants"
 import type { InfiniteData, InfiniteQueryObserver, Query, QueryKey } from "@tanstack/react-query"
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useMemo } from "react"
 
 import { FEED_COLLECTION_LIST } from "../../constants/app"
@@ -18,6 +18,7 @@ import {
   getEntryIsInboxSelector,
   getHasEntrySelector,
 } from "./getter"
+import { fetchNextPageAfterRefetch } from "./next-page"
 import { entrySyncServices, useEntryStore } from "./store"
 import type { EntryModel, FetchEntriesProps, FetchEntriesPropsSettings } from "./types"
 import {
@@ -126,6 +127,10 @@ const refreshEntriesTail = async (query: Query) => {
   await observer.fetchNextPage({ cancelRefetch: false })
 }
 
+// `since` is read from the server's clock and `dataUpdatedAt` from this device's, so a list only
+// counts as fetched after the new entries when it is later by more than any likely clock skew
+const CLOCK_SKEW_MARGIN_MS = 5 * 60 * 1000
+
 /**
  * New entries arrived for these views. Fetch the edge of the entry lists that are on screen
  * where they arrive, the first page of a newest-first list, and merge it into what is loaded,
@@ -163,7 +168,7 @@ export const refreshEntriesHead = async ({
       if (isCollectionQuery || params.aiSort) return
       if (!query.isActive() || query.state.fetchStatus === "fetching") return
       if (!query.state.data) return
-      if (since !== undefined && query.state.dataUpdatedAt > since) return
+      if (since !== undefined && query.state.dataUpdatedAt > since + CLOCK_SKEW_MARGIN_MS) return
 
       if (params.sortOrder === "asc") {
         await refreshEntriesTail(query)
@@ -293,10 +298,16 @@ export const useEntriesQuery = (
     subscribed: options?.subscribed,
   })
   const { fetchNextPage: queryFetchNextPage, refetch: queryRefetch } = query
+  // The client the query lives in, to see what it is fetching when the next page is asked for
+  const reactQueryClient = useQueryClient()
   const fetchNextPage = useCallback(
     (options?: Parameters<typeof queryFetchNextPage>[0]) =>
-      queryFetchNextPage({ cancelRefetch: false, ...options }),
-    [queryFetchNextPage],
+      fetchNextPageAfterRefetch(
+        reactQueryClient.getQueryState(queryKey),
+        queryFetchNextPage,
+        options,
+      ),
+    [queryFetchNextPage, queryKey, reactQueryClient],
   )
   // A refresh starts over from the top. Without trimming, the infinite query would request
   // every page the user had scrolled through again, one after another.
@@ -363,10 +374,15 @@ export const useEntriesQuery = (
   }, [entriesIds, fetchNextPage, query, queryKey, refetch])
 }
 
-export const usePrefetchEntryDetail = (entryId: string | undefined, isInbox?: boolean) => {
+export const usePrefetchEntryDetail = (
+  entryId: string | undefined,
+  isInbox?: boolean,
+  options?: { enabled?: boolean },
+) => {
   return useQuery({
     queryKey: ["entry", entryId],
     queryFn: () => entrySyncServices.fetchEntryDetail(entryId, isInbox),
+    enabled: options?.enabled,
   })
 }
 

@@ -5,26 +5,17 @@ import type {
 } from "@follow-app/client-sdk"
 import type { Command } from "commander"
 
-import { parseView, viewHelp } from "../args"
-import { runCommand } from "../command"
+import { parseChoice, parseView, viewHelp } from "../args"
+import { runCommand, toChangeResult } from "../command"
 import { CLIError } from "../output"
+import type { SubscriptionTarget } from "../subscriptions"
+import { findSubscription, isListSubscription } from "../subscriptions"
+import { toSubscriptionRow } from "../table-views"
 
-type SubscriptionTarget = "feed" | "list" | "url"
-type UpdateTarget = "feed" | "list"
+type UpdateTarget = Exclude<SubscriptionTarget, "url">
 
-const parseSubscriptionTarget = (value: string): SubscriptionTarget => {
-  if (value === "feed" || value === "list" || value === "url") {
-    return value
-  }
-  throw new Error(`Invalid target "${value}". Use feed, list, or url.`)
-}
-
-const parseUpdateTarget = (value: string): UpdateTarget => {
-  if (value === "feed" || value === "list") {
-    return value
-  }
-  throw new Error(`Invalid target "${value}". Use feed or list.`)
-}
+const parseSubscriptionTarget = parseChoice<SubscriptionTarget>("target", ["feed", "list", "url"])
+const parseUpdateTarget = parseChoice<UpdateTarget>("target", ["feed", "list"])
 
 interface SubscriptionListOptions {
   view?: number
@@ -62,19 +53,23 @@ export const registerSubscriptionCommand = (program: Command) => {
     .option("--view <type>", `View type: ${viewHelp}`, parseView)
     .option("--category <name>", "Filter by category")
     .action(async function (this: Command, options: SubscriptionListOptions) {
-      await runCommand(this, async ({ client }) => {
-        const response = await client.api.subscriptions.get(
-          options.view !== undefined ? { view: options.view } : {},
-        )
+      await runCommand(
+        this,
+        async ({ client }) => {
+          const response = await client.api.subscriptions.get(
+            options.view !== undefined ? { view: options.view } : {},
+          )
 
-        const subscriptions = options.category
-          ? response.data.filter((item) => item.category === options.category)
-          : response.data
+          const subscriptions = options.category
+            ? response.data.filter((item) => item.category === options.category)
+            : response.data
 
-        return {
-          subscriptions,
-        }
-      })
+          return {
+            subscriptions,
+          }
+        },
+        { table: (result) => ({ subscriptions: result.subscriptions.map(toSubscriptionRow) }) },
+      )
     })
 
   subscriptionCommand
@@ -110,12 +105,17 @@ export const registerSubscriptionCommand = (program: Command) => {
           request.type = "list"
         }
 
+        // The feed or list it followed, its unread counts and the sync id of the change
         const response = await client.api.subscriptions.create(request)
-        return {
-          feed: response.feed,
-          list: response.list,
-          unread: response.unread,
+        // A URL without a feed, such as a page that links none or answers 404, is answered with
+        // success and nothing followed
+        if (!response.feed && !response.list) {
+          throw new CLIError(
+            "NOT_FOUND",
+            options.feed ? `No feed found at ${options.feed}.` : `List ${options.list} not found.`,
+          )
         }
+        return toChangeResult(response)
       })
     })
 
@@ -131,18 +131,15 @@ export const registerSubscriptionCommand = (program: Command) => {
     )
     .action(async function (this: Command, id: string, options: SubscriptionRemoveOptions) {
       await runCommand(this, async ({ client }) => {
-        const request: SubscriptionDeleteRequest = {}
-
-        if (options.target === "feed") {
-          request.feedId = id
-        } else if (options.target === "list") {
-          request.listId = id
-        } else {
-          request.url = id
-        }
+        const subscription = await findSubscription(client, id, options.target)
+        const request: SubscriptionDeleteRequest = isListSubscription(subscription)
+          ? { listId: subscription.listId }
+          : options.target === "url"
+            ? { url: subscription.feeds.url }
+            : { feedId: subscription.feedId }
 
         const response = await client.api.subscriptions.delete(request)
-        return response.data
+        return toChangeResult(response)
       })
     })
 
@@ -177,12 +174,6 @@ export const registerSubscriptionCommand = (program: Command) => {
           request.isPrivate = false
         }
 
-        if (options.target === "feed") {
-          request.feedId = id
-        } else {
-          request.listId = id
-        }
-
         if (
           request.category === undefined &&
           request.title === undefined &&
@@ -195,8 +186,15 @@ export const registerSubscriptionCommand = (program: Command) => {
           )
         }
 
+        const subscription = await findSubscription(client, id, options.target)
+        if (isListSubscription(subscription)) {
+          request.listId = subscription.listId
+        } else {
+          request.feedId = subscription.feedId
+        }
+
         const response = await client.api.subscriptions.update(request)
-        return response.data
+        return toChangeResult(response)
       })
     })
 }

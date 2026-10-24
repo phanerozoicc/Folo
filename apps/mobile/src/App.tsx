@@ -1,11 +1,10 @@
 import { usePrefetchActions } from "@follow/store/action/hooks"
-import { usePrefetchSessionUser } from "@follow/store/user/hooks"
+import { usePrefetchSessionUser, useWhoami } from "@follow/store/user/hooks"
 import { StatusBar } from "expo-status-bar"
 import type { FC, PropsWithChildren } from "react"
 import { useEffect, useRef } from "react"
 import { View } from "react-native"
 import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated"
-import { RootSiblingParent } from "react-native-root-siblings"
 import { useSheet } from "react-native-sheet-transitions"
 
 import { useBackHandler } from "./hooks/useBackHandler"
@@ -17,6 +16,7 @@ import { useAuthSessionCookieRefresh } from "./lib/auth"
 import { useSyncAppColorScheme } from "./lib/color-scheme"
 import { destination } from "./lib/navigation/biz/Destination"
 import { DebugButton, EnvProfileIndicator } from "./modules/debug"
+import { rememberSignedIn } from "./modules/login/returning-user"
 import { ReviewPromptProvider } from "./modules/review-prompt/provider"
 
 export function App({ children }: { children: React.ReactNode }) {
@@ -26,9 +26,7 @@ export function App({ children }: { children: React.ReactNode }) {
       <View className="flex-1 bg-system-background">
         <SideEffect />
 
-        <ScaleableWrapper>
-          <RootSiblingParent>{children}</RootSiblingParent>
-        </ScaleableWrapper>
+        <ScaleableWrapper>{children}</ScaleableWrapper>
 
         {__DEV__ && <DebugButton />}
 
@@ -72,6 +70,11 @@ const SideEffect = () => {
       destination.Login()
     }
   }, [sessionQuery.data?.user, sessionQuery.isSuccess])
+  // Any signed-in user counts, the one restored from the device at launch included
+  const whoamiId = useWhoami()?.id
+  useEffect(() => {
+    if (whoamiId) rememberSignedIn()
+  }, [whoamiId])
   useUnreadCountBadge()
   useBackHandler()
   useIntentHandler()

@@ -7,7 +7,7 @@ import { unreadSyncService } from "@follow/store/unread/store"
 import { useIsLoggedIn } from "@follow/store/user/hooks"
 import { tracker } from "@follow/tracker"
 import type { ImageSource } from "expo-image"
-import { memo, useCallback } from "react"
+import { memo, use, useCallback } from "react"
 import { Pressable, View } from "react-native"
 import type { MeasuredDimensions } from "react-native-reanimated"
 import Animated, { measure, runOnJS, runOnUI, useAnimatedRef } from "react-native-reanimated"
@@ -26,8 +26,12 @@ import { NativePressable } from "@/src/components/ui/pressable/NativePressable"
 import { Text } from "@/src/components/ui/typography/Text"
 import { VideoPlayer } from "@/src/components/ui/video/VideoPlayer"
 import { useNavigation } from "@/src/lib/navigation/hooks"
+import { EntryListSourceContext } from "@/src/modules/entry-content/entry-navigation/entry-list-source"
+import { useIsReadingEntry } from "@/src/modules/entry-split/context"
+import { EntrySelectedBackground } from "@/src/modules/entry-split/EntrySelectedBackground"
+import { useOpenEntry } from "@/src/modules/entry-split/use-open-entry"
 import { useSocialAuthorTitle } from "@/src/modules/feed/feed-title"
-import { EntryDetailScreen } from "@/src/screens/(stack)/entries/[entryId]/EntryDetailScreen"
+import { selectFeed } from "@/src/modules/screen/atoms"
 import { FeedScreen } from "@/src/screens/(stack)/feeds/[feedId]/FeedScreen"
 
 import { EntryItemContextMenu } from "../../context-menu/entry"
@@ -59,6 +63,9 @@ export const EntrySocialItem = memo(
     const authorTitle = useSocialAuthorTitle(entry?.feedId, entry?.author)
     const isLoggedIn = useIsLoggedIn()
     const navigation = useNavigation()
+    const openEntry = useOpenEntry()
+    const isReading = useIsReadingEntry(entryId)
+    const entryListSource = use(EntryListSourceContext)
     const handlePress = useCallback(() => {
       if (isLoggedIn) {
         unreadSyncService.markEntryAsRead(entryId)
@@ -67,26 +74,29 @@ export const EntrySocialItem = memo(
         feedId: entry?.feedId ?? "",
         entryId,
       })
-      navigation.pushControllerView(EntryDetailScreen, {
+      openEntry({
         entryId,
         entryIds: extraData.entryIds ?? [],
+        entryListSource,
         view: FeedViewType.SocialMedia,
       })
-    }, [entry?.feedId, entryId, extraData.entryIds, isLoggedIn, navigation])
+    }, [entry?.feedId, entryId, entryListSource, extraData.entryIds, isLoggedIn, openEntry])
     const autoExpandLongSocialMedia = useGeneralSettingKey("autoExpandLongSocialMedia")
     const navigationToFeedEntryList = useCallback(() => {
       if (!entry?.feedId) return
+      // FeedScreen shows the selected feed, not the one it is pushed with
+      selectFeed({ type: "feed", feedId: entry.feedId })
       navigation.pushControllerView(FeedScreen, {
         feedId: entry.feedId,
       })
     }, [entry?.feedId, navigation])
     const onPreviewImage = useCallback(
-      (index: number, rect: MeasuredDimensions | null, placeholder: ImageSource | undefined) => {
+      (index: number, rect: MeasuredDimensions | null, thumbnail: ImageSource | undefined) => {
         "worklet"
 
         runOnJS(openLightbox)({
           images: (entry?.media ?? [])
-            .map((mediaItem) => {
+            .map((mediaItem, mediaIndex) => {
               const imageUrl =
                 mediaItem.type === "video"
                   ? mediaItem.preview_image_url
@@ -99,9 +109,8 @@ export const EntrySocialItem = memo(
                   width: mediaItem.width ?? 0,
                   height: mediaItem.height ?? 0,
                 },
-                thumbUri: placeholder ?? {
-                  uri: imageUrl,
-                },
+                // Only the tapped image has its thumbnail at hand, other pages wait for their own
+                thumbUri: mediaIndex === index ? thumbnail : undefined,
                 thumbDimensions: null,
                 thumbRect: rect,
                 type: "image" as const,
@@ -113,7 +122,8 @@ export const EntrySocialItem = memo(
       },
       [entry?.media, openLightbox],
     )
-    if (!entry) return <EntryItemSkeleton />
+    // Nothing loads an entry missing from the store, so its placeholder holds still
+    if (!entry) return <EntryItemSkeleton animated={false} />
     const { description, publishedAt, media } = entry
     return (
       <EntryItemContextMenu id={entryId} view={FeedViewType.SocialMedia}>
@@ -121,12 +131,14 @@ export const EntrySocialItem = memo(
           itemStyle={ItemPressableStyle.Plain}
           className="flex flex-col gap-2 p-4 pl-6"
           onPress={handlePress}
+          accessibilityState={isReading ? { selected: true } : undefined}
         >
+          {isReading && <EntrySelectedBackground />}
           {!entry.read && (
             <View className="absolute left-1.5 top-[25] size-2 rounded-full bg-red" />
           )}
 
-          <View className="flex flex-1 flex-row items-start gap-4">
+          <View className="flex flex-row items-start gap-4">
             <NativePressable hitSlop={10} onPress={navigationToFeedEntryList}>
               {entry.authorAvatar ? (
                 <UserAvatar
@@ -191,7 +203,7 @@ interface EntryMediaItemProps {
   onPreviewImage: (
     index: number,
     rect: MeasuredDimensions | null,
-    placeholder: ImageSource | undefined,
+    thumbnail: ImageSource | undefined,
   ) => void
 }
 const EntryMediaItem = memo(
@@ -211,7 +223,9 @@ const EntryMediaItem = memo(
       <Animated.View ref={aviRef} collapsable={false}>
         <NativePressable
           onPress={() => {
-            const [placeholder] = getAllSources(
+            // The proxied thumbnail is what this tile shows, so the lightbox can show it from the
+            // cache while the original loads
+            const [, thumbnail] = getAllSources(
               {
                 uri: imageUrl,
               },
@@ -221,10 +235,7 @@ const EntryMediaItem = memo(
               "worklet"
 
               const rect = measure(aviRef)
-              onPreviewImage(index, rect, {
-                blurhash: mediaItem.blurhash,
-                ...placeholder,
-              })
+              onPreviewImage(index, rect, thumbnail)
             })()
           }}
         >

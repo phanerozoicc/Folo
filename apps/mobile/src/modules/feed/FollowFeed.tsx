@@ -1,8 +1,14 @@
 import { FeedViewType } from "@follow/constants"
-import { useFeedById, usePrefetchFeed, usePrefetchFeedByUrl } from "@follow/store/feed/hooks"
+import {
+  useFeedById,
+  useFeedByIdOrUrl,
+  usePrefetchFeed,
+  usePrefetchFeedByUrl,
+} from "@follow/store/feed/hooks"
 import { useSubscriptionByFeedId } from "@follow/store/subscription/hooks"
 import { subscriptionSyncService } from "@follow/store/subscription/store"
 import type { SubscriptionForm } from "@follow/store/subscription/types"
+import { whoami } from "@follow/store/user/getters"
 import { formatNumber } from "@follow/utils"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useEffect, useMemo, useState } from "react"
@@ -12,6 +18,7 @@ import { Alert, View } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { z } from "zod"
 
+import { ListErrorView } from "@/src/components/errors/ListErrorView"
 import { HeaderSubmitTextButton } from "@/src/components/layouts/header/HeaderElements"
 import {
   NavigationBlurEffectHeaderView,
@@ -28,12 +35,13 @@ import { Text } from "@/src/components/ui/typography/Text"
 import { SafeAlertCuteReIcon } from "@/src/icons/safe_alert_cute_re"
 import { SafetyCertificateCuteReIcon } from "@/src/icons/safety_certificate_cute_re"
 import { User3CuteReIcon } from "@/src/icons/user_3_cute_re"
-import { sanitizeErrorMessage } from "@/src/lib/error-message"
-import { toastFetchError } from "@/src/lib/error-parser"
+import { isNotFoundError, toastFetchError } from "@/src/lib/error-parser"
+import { destination } from "@/src/lib/navigation/biz/Destination"
 import { useCanDismiss, useNavigation } from "@/src/lib/navigation/hooks"
 import { useSetModalScreenOptions } from "@/src/lib/navigation/ScreenOptionsContext"
 import { toast } from "@/src/lib/toast"
 import { FeedSummary } from "@/src/modules/discover/FeedSummary"
+import { FollowStateView } from "@/src/modules/feed/FollowStateView"
 import { FeedViewSelector } from "@/src/modules/feed/view-selector"
 import { useColor } from "@/src/theme/colors"
 
@@ -46,36 +54,74 @@ const formSchema = z.object({
 })
 type FollowFeedFormInput = z.input<typeof formSchema>
 type FollowFeedFormOutput = z.output<typeof formSchema>
-export function FollowFeed(props: { id: string }) {
+const LoadingIndicator = () => (
+  <View className="mt-24 flex-1 flex-row items-start justify-center">
+    <PlatformActivityIndicator />
+  </View>
+)
+const FeedNotFound = ({ id }: { id: string }) => {
+  const { t } = useTranslation()
+  return <Text className="mt-24 px-4 text-center text-label">{t("feed.not_found", { id })}</Text>
+}
+const FeedLoadState = ({
+  id,
+  isFetching,
+  error,
+  onRetry,
+}: {
+  id: string
+  isFetching: boolean
+  error: Error | null
+  onRetry: () => void
+}) => {
+  const { t } = useTranslation()
+  return (
+    <FollowStateView>
+      {isFetching ? (
+        <LoadingIndicator />
+      ) : error && !isNotFoundError(error) ? (
+        <ListErrorView error={error} resetError={onRetry} description={t("feed.fetch_failed")} />
+      ) : (
+        // Also for a feed the server does not have, which no retry would find
+        <FeedNotFound id={id} />
+      )}
+    </FollowStateView>
+  )
+}
+/** `defaultView` is the view a link asked for, which wins over the one the feed suggests */
+export function FollowFeed(props: { id: string; defaultView?: FeedViewType }) {
   const { id } = props
   const feed = useFeedById(id as string)
-  const { data } = usePrefetchFeed(id as string)
+  const { data, error, isFetching, refetch } = usePrefetchFeed(id as string)
   if (!feed) {
     return (
-      <View className="mt-24 flex-1 flex-row items-start justify-center">
-        <PlatformActivityIndicator />
-      </View>
+      <FeedLoadState id={id} isFetching={isFetching} error={error} onRetry={() => void refetch()} />
     )
   }
-  return <FollowImpl feedId={id} defaultView={data?.analytics?.view ?? undefined} />
+  return (
+    <FollowImpl feedId={id} defaultView={props.defaultView ?? data?.analytics?.view ?? undefined} />
+  )
 }
-export function FollowUrl(props: { url: string }) {
+export function FollowUrl(props: { url: string; defaultView?: FeedViewType }) {
   const { url } = props
-  const { isLoading, data, error } = usePrefetchFeedByUrl(url)
-  if (isLoading) {
+  const { isFetching, data, error, refetch } = usePrefetchFeedByUrl(url)
+  // A feed the server had not stored yet is previewed under a nonce id until the feed itself
+  // arrives, e.g. by following it, and takes the preview's place
+  const feedId = useFeedByIdOrUrl({ id: data?.feed.id, url: data?.feed.url })?.id ?? data?.feed.id
+  if (!data || !feedId) {
     return (
-      <View className="mt-24 flex-1 flex-row items-start justify-center">
-        <PlatformActivityIndicator />
-      </View>
+      <FeedLoadState
+        id={url}
+        isFetching={isFetching}
+        error={error}
+        onRetry={() => void refetch()}
+      />
     )
-  }
-  if (!data) {
-    return <Text className="text-label">{sanitizeErrorMessage(error?.message ?? "")}</Text>
   }
   return (
     <FollowImpl
-      feedId={data.feed.id}
-      defaultView={data.responseData?.analytics?.view ?? undefined}
+      feedId={feedId}
+      defaultView={props.defaultView ?? data.responseData?.analytics?.view ?? undefined}
     />
   )
 }
@@ -110,6 +156,11 @@ function FollowImpl(props: { feedId: string; defaultView?: FeedViewType }) {
   const canDismiss = useCanDismiss()
   const submit = async (values: FollowFeedFormOutput) => {
     if (isLoading) return
+    // A link can open the form signed out; the form stays for after the sign-in
+    if (!whoami()) {
+      destination.Login()
+      return
+    }
     setIsLoading(true)
     const body: SubscriptionForm = {
       url: feed?.url,
@@ -183,7 +234,11 @@ function FollowImpl(props: { feedId: string; defaultView?: FeedViewType }) {
     })
   }, [isDirty, setScreenOptions])
   if (!feed?.id) {
-    return <Text className="text-label">{t("feed.not_found", { id })}</Text>
+    return (
+      <FollowStateView>
+        <FeedNotFound id={id} />
+      </FollowStateView>
+    )
   }
   return (
     <SafeNavigationScrollView
@@ -195,6 +250,7 @@ function FollowImpl(props: { feedId: string; defaultView?: FeedViewType }) {
       Header={
         <NavigationBlurEffectHeaderView
           title={`${isSubscribed ? tCommon("words.edit") : tCommon("words.follow")} - ${feed?.title}`}
+          promptBeforeLeave={isDirty}
           headerRight={() => (
             <HeaderSubmitTextButton
               isValid={isValid}

@@ -5,8 +5,9 @@ import * as React from "react"
 import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import type { StyleProp, ViewStyle } from "react-native"
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native"
+import { ScrollView, StyleSheet, Text, View } from "react-native"
 import Animated, { interpolate, interpolateColor, useAnimatedStyle } from "react-native-reanimated"
+import { useSafeAreaFrame } from "react-native-safe-area-context"
 
 import { ReAnimatedPressable } from "@/src/components/common/AnimatedComponents"
 import { TIMELINE_VIEW_SELECTOR_HEIGHT } from "@/src/constants/ui"
@@ -83,12 +84,14 @@ export function TimelineViewSelector() {
 }
 function ItemWrapper({
   index,
+  isActive,
   activeColor,
   children,
   onPress,
   style,
   className,
   testID,
+  accessibilityLabel,
 }: {
   children: React.ReactNode
   index: number
@@ -98,8 +101,10 @@ function ItemWrapper({
   className?: string
   style?: Exclude<StyleProp<ViewStyle>, number>
   testID?: string
+  accessibilityLabel?: string
 }) {
-  const { width: windowWidth } = useWindowDimensions()
+  // The list's width, which is less than the window's next to the reader
+  const { width: windowWidth } = useSafeAreaFrame()
   const activeViews = useViewWithSubscription()
   const dragProgress = useTimelineSelectorDragProgress()
   const isTablet = useIsTabletLayout()
@@ -114,6 +119,9 @@ function ItemWrapper({
   return (
     <ReAnimatedPressable
       testID={testID}
+      accessibilityRole="tab"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ selected: isActive }}
       className={cn(
         "relative flex h-12 flex-row items-center justify-center gap-2 overflow-hidden rounded-[1.2rem] pl-2",
         className,
@@ -155,7 +163,8 @@ function ViewItem({
   const borderColor = useColor("gray5")
   const { t } = useTranslation("common")
   const itemRef = React.useRef<View>(null)
-  const { width: windowWidth } = useWindowDimensions()
+  // The list's width, which is less than the window's next to the reader
+  const { width: windowWidth } = useSafeAreaFrame()
   const dragProgress = useTimelineSelectorDragProgress()
 
   // Scroll to center the active item when it becomes active
@@ -187,6 +196,7 @@ function ViewItem({
           index={index}
           activeColor={view.activeColor}
           testID={`timeline-view-${view.name.replace("feed_view_type.", "").replaceAll("_", "-")}`}
+          accessibilityLabel={t(view.name)}
           onPress={() =>
             selectTimeline({
               type: "view",

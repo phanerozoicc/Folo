@@ -5,8 +5,11 @@ import Store from "electron-store"
 type StoreData = {
   "notifications-credentials"?: Credentials | null
   "notifications-persistent-ids"?: string[] | null
+  /** The push token the server has for this device, once an upload succeeded */
+  "notifications-token-sent"?: string | null
   appearance?: "light" | "dark" | "system" | null
   cacheSizeLimit?: number | null
+  cliSyncEnabled?: boolean | null
   eagleContextMenuEnabled?: boolean | null
   minimizeToTray?: boolean | null
   proxy?: string | null
@@ -14,6 +17,7 @@ type StoreData = {
   user?: string | null
   windowState?: {
     height: number
+    isMaximized?: boolean
     width: number
     x: number
     y: number

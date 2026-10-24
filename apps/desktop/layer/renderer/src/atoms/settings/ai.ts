@@ -9,9 +9,10 @@ import type {
 import { DEFAULT_SHORTCUT_TARGETS } from "@follow/shared/settings/interface"
 import { jotaiStore } from "@follow/utils"
 import type { ExtractResponseData, GetStatusConfigsResponse } from "@follow-app/client-sdk"
-import { clamp } from "es-toolkit"
+import { clamp, isEqual } from "es-toolkit"
 import { atom, useAtomValue } from "jotai"
 
+import { getServerConfigs } from "~/atoms/server-configs"
 import { getFeature } from "~/hooks/biz/useFeature"
 
 export interface WebAISettings extends AISettings {
@@ -46,6 +47,17 @@ const normalizeShortcut = (shortcut: AIShortcut): AIShortcut => {
 
 const normalizeShortcuts = (shortcuts: readonly AIShortcut[] | undefined): AIShortcut[] =>
   (shortcuts ?? []).map((shortcut) => normalizeShortcut({ ...shortcut }))
+
+/** A server shortcut as the merge adds it to the shortcuts of a device that lacks it. */
+const createServerShortcut = (serverShortcut: ServerShortcutConfig): AIShortcut => ({
+  id: serverShortcut.id,
+  name: serverShortcut.name,
+  prompt: "",
+  defaultPrompt: serverShortcut.defaultPrompt,
+  enabled: true,
+  icon: FALLBACK_SHORTCUT_ICON,
+  displayTargets: sanitizeShortcutTargets(serverShortcut.displayTargets),
+})
 
 const mergeWithServerShortcuts = (
   localShortcuts: readonly AIShortcut[],
@@ -88,18 +100,23 @@ const mergeWithServerShortcuts = (
   serverShortcuts.forEach((serverShortcut) => {
     if (seenServerShortcutIds.has(serverShortcut.id)) return
 
-    mergedShortcuts.push({
-      id: serverShortcut.id,
-      name: serverShortcut.name,
-      prompt: "",
-      defaultPrompt: serverShortcut.defaultPrompt,
-      enabled: true,
-      icon: FALLBACK_SHORTCUT_ICON,
-      displayTargets: sanitizeShortcutTargets(serverShortcut.displayTargets),
-    })
+    mergedShortcuts.push(createServerShortcut(serverShortcut))
   })
 
   return mergedShortcuts
+}
+
+/**
+ * Every device adds the server's shortcuts to its own, signed in or not. Shortcuts that are only
+ * those, as the merge added them from the server configs this device loaded last, hold nothing
+ * the user made or changed.
+ */
+export const hasOnlyUnchangedServerShortcuts = (shortcuts: readonly AIShortcut[]) => {
+  const serverShortcuts = getServerConfigs()?.AI_SHORTCUTS ?? []
+  return shortcuts.every((shortcut) => {
+    const serverShortcut = serverShortcuts.find(({ id }) => id === shortcut.id)
+    return !!serverShortcut && isEqual(shortcut, createServerShortcut(serverShortcut))
+  })
 }
 
 export const getShortcutEffectivePrompt = (shortcut: AIShortcut): string => {
@@ -146,11 +163,17 @@ export const useOwnAIActive = () => isOwnAIConfigured(useAISettingKey("ownAi"))
 export const syncServerShortcuts = (
   serverShortcuts: readonly ServerShortcutConfig[] | null | undefined,
 ) => {
-  const storedShortcuts = getAISettings().shortcuts ?? []
+  const currentSettings = jotaiStore.get(__aiSettingAtom)
+  const storedShortcuts = currentSettings.shortcuts ?? []
   const serverShortcutList = Array.isArray(serverShortcuts) ? serverShortcuts : []
   const mergedShortcuts = mergeWithServerShortcuts(storedShortcuts, serverShortcutList)
 
-  setAISetting("shortcuts", mergedShortcuts)
+  if (isEqual(mergedShortcuts, storedShortcuts)) return
+
+  // Every device merges the server defaults on its own. Writing them as a user change would
+  // stamp the AI settings as just updated and upload them on each launch, which overrides newer
+  // AI settings from other devices.
+  jotaiStore.set(__aiSettingAtom, { ...currentSettings, shortcuts: mergedShortcuts })
 }
 
 ////////// AI Panel Style

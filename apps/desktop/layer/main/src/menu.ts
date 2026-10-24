@@ -1,6 +1,5 @@
 import { callWindowExpose } from "@follow/shared/bridge"
 import { DEV } from "@follow/shared/constants"
-import { dispatchEventOnWindow } from "@follow/shared/event"
 import { name } from "@pkg"
 import type { BrowserWindow, MenuItem, MenuItemConstructorOptions } from "electron"
 import { Menu } from "electron"
@@ -9,8 +8,9 @@ import { isMacOS, isMAS } from "./env"
 import { clearAllDataAndConfirm } from "./lib/cleaner"
 import { t } from "./lib/i18n"
 import { revealLogFile } from "./logger"
+import { FindBarManager } from "./manager/find-bar"
 import { WindowManager } from "./manager/window"
-import { checkForAppUpdates, quitAndInstall } from "./updater"
+import { checkForAppUpdatesFromMenu, quitAndInstall } from "./updater"
 
 export const registerAppMenu = () => {
   const menus: Array<MenuItemConstructorOptions | MenuItem> = [
@@ -59,7 +59,7 @@ export const registerAppMenu = () => {
           click: () => {
             const mainWindow = WindowManager.getMainWindow()
             if (!mainWindow) return
-            mainWindow.show()
+            WindowManager.showMainWindow(mainWindow)
             const caller = callWindowExpose(mainWindow)
             caller.quickAdd()
           },
@@ -72,7 +72,7 @@ export const registerAppMenu = () => {
           click: () => {
             const mainWindow = WindowManager.getMainWindow()
             if (!mainWindow) return
-            mainWindow.show()
+            WindowManager.showMainWindow(mainWindow)
 
             const caller = callWindowExpose(mainWindow)
             caller.goToDiscover()
@@ -99,7 +99,7 @@ export const registerAppMenu = () => {
           accelerator: "CmdOrCtrl+F",
           click(_e, window) {
             if (!window) return
-            dispatchEventOnWindow(window as BrowserWindow, "OpenSearch")
+            FindBarManager.open(window as BrowserWindow)
           },
         },
         ...((isMacOS
@@ -182,8 +182,8 @@ export const registerAppMenu = () => {
               {
                 label: t("menu.checkForUpdates"),
                 click: async () => {
-                  WindowManager.getMainWindow()?.show()
-                  await checkForAppUpdates()
+                  WindowManager.showMainWindow()
+                  await checkForAppUpdatesFromMenu()
                 },
               },
             ]

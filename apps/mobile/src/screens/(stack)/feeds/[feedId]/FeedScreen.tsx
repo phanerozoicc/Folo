@@ -1,11 +1,10 @@
 import { FeedViewType } from "@follow/constants"
 import { useFeedById } from "@follow/store/feed/hooks"
-import { useIsSubscribed } from "@follow/store/subscription/hooks"
+import { useIsSubscribed, useSubscriptionById } from "@follow/store/subscription/hooks"
 import { isBizId, withOpacity } from "@follow/utils"
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { Pressable, StyleSheet } from "react-native"
-import { RootSiblingParent } from "react-native-root-siblings"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { ThemedBlurView } from "@/src/components/common/ThemedBlurView"
@@ -14,6 +13,7 @@ import { Text } from "@/src/components/ui/typography/Text"
 import { useNavigation } from "@/src/lib/navigation/hooks"
 import type { NavigationControllerView } from "@/src/lib/navigation/types"
 import { EntryListSelector } from "@/src/modules/entry-list/EntryListSelector"
+import { EntrySplitView } from "@/src/modules/entry-split/EntrySplitView"
 import { useFloatingPlayerBarInset } from "@/src/modules/player/hooks"
 import { EntryListContext, useEntries, useSelectedView } from "@/src/modules/screen/atoms"
 import { TimelineHeader } from "@/src/modules/screen/TimelineSelectorProvider"
@@ -29,13 +29,19 @@ export const FeedScreen: NavigationControllerView<{
   const navigation = useNavigation()
   const isSubscribed = useIsSubscribed(feedIdentifier)
   const isPreview = !isSubscribed && isBizId(feedIdentifier)
+  // A feed or list opened outside the Subscriptions tab, e.g. from a profile, keeps its own view
+  // instead of the one selected on Home. Categories, inboxes and previews use the selected view.
+  const subscriptionView = useSubscriptionById(feedIdentifier)?.view
   const { t } = useTranslation("common")
-  const entryListContextValue = useMemo(() => ({ type: "feed" as const, isPreview }), [isPreview])
+  const entryListContextValue = useMemo(
+    () => ({ type: "feed" as const, isPreview, view: subscriptionView }),
+    [isPreview, subscriptionView],
+  )
 
   return (
     <EntryListContext value={entryListContextValue}>
-      <RootSiblingParent>
-        <BottomTabBarHeightContext value={insets.bottom + floatingPlayerBarInset}>
+      <BottomTabBarHeightContext value={insets.bottom + floatingPlayerBarInset}>
+        <EntrySplitView>
           <TimelineHeader feedId={feed?.id} />
           <FeedScreenEntryList />
           {isPreview && (
@@ -60,8 +66,8 @@ export const FeedScreen: NavigationControllerView<{
               <Text className="font-bold text-white">{t("words.follow")}</Text>
             </Pressable>
           )}
-        </BottomTabBarHeightContext>
-      </RootSiblingParent>
+        </EntrySplitView>
+      </BottomTabBarHeightContext>
     </EntryListContext>
   )
 }

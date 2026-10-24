@@ -13,10 +13,11 @@ import type { SFSymbol } from "sf-symbols-typescript"
 import { Text } from "@/src/components/ui/typography/Text"
 import { CheckFilledIcon } from "@/src/icons/check_filled"
 import { MingcuteRightLine } from "@/src/icons/mingcute_right_line"
-import { useIsTabletLayout } from "@/src/lib/responsive"
+import { useReadableContainerStyle } from "@/src/lib/responsive"
 import { accentColor, useColor } from "@/src/theme/colors"
 
 import { PlatformActivityIndicator } from "../loading/PlatformActivityIndicator"
+import { GroupedCellLabelContext } from "./cell-label-context"
 import {
   GROUPED_ICON_TEXT_GAP,
   GROUPED_LIST_ITEM_PADDING,
@@ -28,10 +29,17 @@ import { getGroupedListChildKey } from "./grouped-list-key"
 import { GroupedInsetListCardItemStyle } from "./GroupedInsetListCardItemStyle"
 
 const GROUPED_TABLET_MAX_WIDTH = 760
-const GROUPED_TABLET_CARD_STYLE: ViewStyle = {
-  width: "100%",
-  maxWidth: GROUPED_TABLET_MAX_WIDTH,
-  alignSelf: "center",
+/**
+ * The centred column grouped lists use on the tablet layout. It leaves room for the side margins in
+ * a window narrower than the column and its margins, such as iPad mini in portrait, where a full
+ * width column pushed the cards against the window edges.
+ */
+const useGroupedTabletColumnStyle = () =>
+  useReadableContainerStyle(GROUPED_TABLET_MAX_WIDTH, GROUPED_LIST_MARGIN)
+// Text above and below a card starts where the text in its cells does
+const GROUPED_OUTER_TEXT_INSETS: ViewStyle = {
+  paddingHorizontal: GROUPED_LIST_ITEM_PADDING,
+  marginHorizontal: GROUPED_LIST_MARGIN,
 }
 
 interface GroupedInsetListCardProps {
@@ -46,8 +54,18 @@ interface BaseCellClassNames {
 }
 export const GroupedOutlineDescription: FC<{
   description: string
-}> = ({ description }) => {
-  return <Text className="mx-9 mt-2 text-xs text-secondary-label">{description}</Text>
+  /** Shows it as an error, such as the validation message of the field above */
+  isError?: boolean
+}> = ({ description, isError }) => {
+  // The section header's column and insets, so it lines up with the card on iPad too
+  const tabletColumnStyle = useGroupedTabletColumnStyle()
+  return (
+    <View style={[tabletColumnStyle, GROUPED_OUTER_TEXT_INSETS]}>
+      <Text className={cn("mt-2 text-xs", isError ? "text-red" : "text-secondary-label")}>
+        {description}
+      </Text>
+    </View>
+  )
 }
 export const GroupedInsetListCard: FC<
   PropsWithChildren & ViewProps & GroupedInsetListCardProps
@@ -63,8 +81,7 @@ export const GroupedInsetListCard: FC<
     const normalizedChildren = Array.isArray(children) ? children : [children]
     return normalizedChildren.filter(Boolean)
   }, [children])
-  const isTablet = useIsTabletLayout()
-  const tabletCardStyle = isTablet ? GROUPED_TABLET_CARD_STYLE : undefined
+  const tabletCardStyle = useGroupedTabletColumnStyle()
   return (
     <View
       {...props}
@@ -75,8 +92,10 @@ export const GroupedInsetListCard: FC<
         },
         props.style,
       ]}
+      // shrink-0: Yoga gives a lone child that can both grow and shrink a zero flex basis, then
+      // keeps it after a sibling changes height, so a card alone in a wrapper collapsed to nothing
       className={cn(
-        "flex flex-1 flex-col overflow-hidden rounded-[10px] bg-secondary-system-grouped-background",
+        "flex flex-1 shrink-0 flex-col overflow-hidden rounded-[10px] bg-secondary-system-grouped-background",
         className,
       )}
     >
@@ -118,13 +137,10 @@ export const GroupedInsetListSectionHeader: FC<{
   label: string
   marginSize?: "normal" | "small"
 }> = ({ label, marginSize = "normal" }) => {
-  const isTablet = useIsTabletLayout()
+  const tabletColumnStyle = useGroupedTabletColumnStyle()
   const sectionStyle: ViewStyle = {
-    width: isTablet ? "100%" : undefined,
-    maxWidth: isTablet ? GROUPED_TABLET_MAX_WIDTH : undefined,
-    alignSelf: isTablet ? "center" : undefined,
-    paddingHorizontal: GROUPED_LIST_ITEM_PADDING,
-    marginHorizontal: GROUPED_LIST_MARGIN,
+    ...tabletColumnStyle,
+    ...GROUPED_OUTER_TEXT_INSETS,
     marginTop:
       marginSize === "normal" ? GROUPED_SECTION_TOP_MARGIN : GROUPED_SECTION_TOP_MARGIN / 2,
     marginBottom: GROUPED_SECTION_BOTTOM_MARGIN,
@@ -231,6 +247,8 @@ export const GroupedInsetListCell: FC<
     description?: string
     children?: React.ReactNode
     icon?: SFSymbol
+    /** Shown after the label, such as a paid badge */
+    labelAccessory?: React.ReactNode
     onPress?: () => void
     testID?: string
   } & BaseCellClassNames
@@ -242,15 +260,19 @@ export const GroupedInsetListCell: FC<
   leftClassName,
   rightClassName,
   icon,
+  labelAccessory,
   onPress,
   testID,
 }) => {
   const { i18n } = useTranslation()
+  const iconColor = useColor("label")
 
   return (
     <GroupedInsetListBaseCell
       testID={testID}
-      className={cn("flex flex-1 bg-secondary-system-grouped-background", className)}
+      // grow rather than flex-1: it fills a row, and as the only child of a column, such as a
+      // swipeable row, it keeps its height instead of a zero flex basis
+      className={cn("flex grow bg-secondary-system-grouped-background", className)}
       as={onPress ? Pressable : undefined}
       {...(onPress
         ? {
@@ -260,15 +282,20 @@ export const GroupedInsetListCell: FC<
     >
       <View className={cn("flex-1 gap-1", leftClassName)}>
         <View className="flex-row items-center gap-2">
-          {!!icon && <SymbolView name={icon} size={20} tintColor="black" />}
-          <Text className="text-sm text-label">{titleCaseIfEnglish(label, i18n.language)}</Text>
+          {!!icon && <SymbolView name={icon} size={20} tintColor={iconColor} />}
+          <Text className={cn("text-sm text-label", !!labelAccessory && "shrink")}>
+            {titleCaseIfEnglish(label, i18n.language)}
+          </Text>
+          {labelAccessory}
         </View>
         {!!description && (
           <Text className="text-xs leading-tight text-secondary-label">{description}</Text>
         )}
       </View>
 
-      <View className={cn("mb-auto ml-4 shrink-0", rightClassName)}>{children}</View>
+      <View className={cn("mb-auto ml-4 shrink-0", rightClassName)}>
+        <GroupedCellLabelContext value={label}>{children}</GroupedCellLabelContext>
+      </View>
     </GroupedInsetListBaseCell>
   )
 }
@@ -280,7 +307,12 @@ export const GroupedInsetListActionCellRadio: FC<{
   selected?: boolean
 }> = ({ label, description, onPress, disabled, selected }) => {
   return (
-    <Pressable onPress={onPress} disabled={disabled}>
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: !!selected, disabled: !!disabled }}
+    >
       {({ pressed }) => (
         <GroupedInsetListBaseCell
           className={cn(pressed ? "bg-system-fill" : undefined, disabled && "opacity-40")}
@@ -305,7 +337,8 @@ const OverlayInterectionPressable = ({
   ...props
 }: PropsWithChildren & PressableProps) => {
   return (
-    <Pressable {...props} className={cn("flex-1", props.className)}>
+    // No flex-1: as the only child of a menu trigger it kept a zero height once the card resized
+    <Pressable {...props}>
       {({ pressed }) => {
         return (
           <>
@@ -335,6 +368,7 @@ export const GroupedInsetListActionCell: FC<{
   suffix?: React.ReactNode
 }> = ({ label, description, onPress, disabled, icon, prefix, suffix }) => {
   const rightIconColor = useColor("tertiaryLabel")
+  const iconColor = useColor("label")
   return (
     <Pressable
       onPress={onPress}
@@ -348,7 +382,7 @@ export const GroupedInsetListActionCell: FC<{
           <View className="flex-1">
             <View className="flex-row items-center gap-2">
               {prefix}
-              {!!icon && <SymbolView name={icon} size={20} tintColor="black" />}
+              {!!icon && <SymbolView name={icon} size={20} tintColor={iconColor} />}
               <Text className="text-sm text-label">{label}</Text>
             </View>
             {!!description && (

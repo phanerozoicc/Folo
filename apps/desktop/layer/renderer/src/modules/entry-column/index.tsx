@@ -34,6 +34,7 @@ import { useEntryMarkReadHandler } from "./hooks/useEntryMarkReadHandler"
 import { useNavigateFirstEntry } from "./hooks/useNavigateFirstEntry"
 import { EntryListHeader } from "./layouts/EntryListHeader"
 import { EntryEmptyList, EntryList } from "./list"
+import { canFetchNextPage } from "./next-page"
 import { shouldScrollTimelineToTopOnRefreshStateChange } from "./refresh-reset"
 import {
   shouldResetScrollOnTimelineIdentityChange,
@@ -238,11 +239,12 @@ function EntryColumnContent() {
     [flushScrollMarkRead, handleRenderMarkRead, isScrollResetPending, renderAsRead, view],
   )
 
+  // Changes when a fetch ends, so the list asks again for a page it asked for meanwhile
   const fetchNextPage = useCallback(() => {
-    if (state.hasNextPage && !state.isFetchingNextPage) {
+    if (canFetchNextPage({ hasNextPage: state.hasNextPage, isFetching: state.isFetching })) {
       actions.fetchNextPage()
     }
-  }, [actions, state.hasNextPage, state.isFetchingNextPage])
+  }, [actions, state.hasNextPage, state.isFetching])
 
   const ListComponent = getView(view)?.gridMode ? EntryColumnGrid : EntryList
 
@@ -262,6 +264,7 @@ function EntryColumnContent() {
     >
       {entriesIds.length === 0 &&
         !state.isLoading &&
+        !state.isOffline &&
         !state.error &&
         (!feed || feed?.type === "feed") && <AddFeedHelper />}
 
@@ -277,10 +280,16 @@ function EntryColumnContent() {
         key={`${routeFeedId}-${view}`}
       >
         {entriesIds.length === 0 ? (
-          state.isLoading ? (
+          // Guests can't load the timeline and the login modal covers it, so keep the placeholder
+          state.isLoading || (!isLoggedIn && state.error) ? (
             <EntryItemSkeleton view={view} />
           ) : (
-            <EntryEmptyList />
+            <EntryEmptyList
+              error={state.error}
+              offline={state.isOffline}
+              isRetrying={state.isFetching}
+              onRetry={actions.refetch}
+            />
           )
         ) : (
           <ListComponent

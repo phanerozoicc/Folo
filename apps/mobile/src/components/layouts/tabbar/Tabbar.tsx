@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue } from "jotai"
+import { useAtom, useAtomValueRawSync } from "jotai"
 import type { FC } from "react"
 import { memo, use, useCallback, useEffect, useMemo } from "react"
 import type { StyleProp, TextStyle } from "react-native"
@@ -27,13 +27,15 @@ import { BottomTabBarBackgroundContext } from "./contexts/BottomTabBarBackground
 import { BottomTabBarVisibleContext } from "./contexts/BottomTabBarVisibleContext"
 
 export const Tabbar: FC<{
-  onPress?: (index: number) => void
+  /** `wasSelected` tells a tap on the tab already shown */
+  onPress?: (index: number, wasSelected: boolean) => void
 }> = ({ onPress: onPressProp }) => {
   const setTabBarHeight = use(SetBottomTabBarHeightContext)
   const insets = useSafeAreaInsets()
   const tabBarVisible = use(BottomTabBarVisibleContext)
   const tabContext = use(BottomTabContext)
-  const tabScreens = useAtomValue(tabContext.tabScreensAtom)
+  // Every TabScreen registers itself from an effect in the commit that mounts this bar
+  const tabScreens = useAtomValueRawSync(tabContext.tabScreensAtom)
   const [selectedIndex, setSelectedIndex] = useAtom(tabContext.currentIndexAtom)
   const translateY = useSharedValue(0)
   useEffect(() => {
@@ -56,8 +58,9 @@ export const Tabbar: FC<{
   }, [])
   const renderTabScreens = tabScreens.length > 0 ? tabScreens : placeholderTabScreens
   const onPress = useEventCallback((index: number) => {
+    const wasSelected = index === selectedIndex
     setSelectedIndex(index)
-    onPressProp?.(index)
+    onPressProp?.(index, wasSelected)
   })
   return (
     <Animated.View

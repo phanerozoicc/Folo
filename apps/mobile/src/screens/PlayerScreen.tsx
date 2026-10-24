@@ -1,7 +1,7 @@
 import { cn } from "@follow/utils"
 import { LinearGradient } from "expo-linear-gradient"
-import { useEffect, useMemo } from "react"
-import { StyleSheet, View } from "react-native"
+import { use, useEffect, useMemo } from "react"
+import { StyleSheet, useWindowDimensions, View } from "react-native"
 import Reanimated, {
   cancelAnimation,
   useAnimatedStyle,
@@ -11,19 +11,25 @@ import Reanimated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { SheetScreen } from "react-native-sheet-transitions"
 
-import { Image } from "@/src/components/ui/image/Image"
 import { Text } from "@/src/components/ui/typography/Text"
 import { useNavigation } from "@/src/lib/navigation/hooks"
+import { ScreenItemContext } from "@/src/lib/navigation/ScreenItemContext"
 
 import { gentleSpringPreset } from "../constants/spring"
 import type { NavigationControllerView } from "../lib/navigation/types"
+import type { ActivePlayable } from "../lib/player"
 import { useActivePlayable, useIsPlaying, useTtsStreamPlayback } from "../lib/player"
 import { PlayerScreenContext, usePlayerScreenContext } from "../modules/player/context"
 import { ControlGroup, ProgressBar, VolumeBar } from "../modules/player/control"
 import { useCoverGradient } from "../modules/player/hooks"
+import { PlayerArtwork } from "../modules/player/PlayerArtwork"
 import { usePrefetchImageColors } from "../store/image/hooks"
 
-function CoverArt({ cover }: { cover?: string }) {
+function CoverArt({ playable }: { playable: ActivePlayable }) {
+  // The cover is 87% of the window wide, unless the controls below would not fit then, as in
+  // landscape on iPad: its slot is the only part of the screen that shrinks, and the cover with it
+  const maxCoverSize = Math.round(useWindowDimensions().width * 0.87)
+  const slotStyle = useMemo(() => ({ height: maxCoverSize }), [maxCoverSize])
   const scale = useSharedValue(1)
   const ttsStream = useTtsStreamPlayback()
   const playing = useIsPlaying()
@@ -42,14 +48,11 @@ function CoverArt({ cover }: { cover?: string }) {
     }
   })
   return (
-    <Reanimated.View className="mx-auto my-12 aspect-square w-[87%] shadow" style={[animatedStyle]}>
-      <Image
-        source={{
-          uri: cover ?? "",
-        }}
-        className="size-full rounded-lg"
-      />
-    </Reanimated.View>
+    <View className="my-12 shrink items-center" style={slotStyle}>
+      <Reanimated.View className="aspect-square h-full shadow" style={animatedStyle}>
+        <PlayerArtwork playable={playable} size={maxCoverSize} className="size-full rounded-lg" />
+      </Reanimated.View>
+    </View>
   )
 }
 export const PlayerScreen: NavigationControllerView = () => {
@@ -68,6 +71,15 @@ export const PlayerScreen: NavigationControllerView = () => {
     [isGradientLight],
   )
   const navigation = useNavigation()
+  // Once playback ends there is nothing to show, and the empty transparent modal would keep
+  // covering the app. The delay rides out the gap between two tracks.
+  const hasActivePlayable = !!activePlayable
+  const { screenId } = use(ScreenItemContext)
+  useEffect(() => {
+    if (hasActivePlayable) return
+    const timer = setTimeout(() => navigation.__internal_dismiss(screenId), 300)
+    return () => clearTimeout(timer)
+  }, [hasActivePlayable, navigation, screenId])
   if (!activePlayable) {
     return null
   }
@@ -89,8 +101,9 @@ export const PlayerScreen: NavigationControllerView = () => {
         <View className="flex-1" style={contentStyle}>
           <View className="flex-1">
             <DismissIndicator />
-            <CoverArt cover={activePlayable.artwork ?? undefined} />
-            <View className="mx-10 flex-1">
+            <CoverArt playable={activePlayable} />
+            {/* Takes the room the cover leaves, but never less than the controls need */}
+            <View className="mx-10 shrink-0 grow">
               <Text
                 className={cn(
                   "text-xl font-bold opacity-90",
@@ -111,7 +124,8 @@ export const PlayerScreen: NavigationControllerView = () => {
               </Text>
               <ProgressBar />
               <ControlGroup />
-              <View className="flex-1" />
+              {/* Keeps the volume slider clear of the buttons when the cover leaves no room to spare */}
+              <View className="min-h-6 flex-1" />
               <VolumeBar />
             </View>
           </View>

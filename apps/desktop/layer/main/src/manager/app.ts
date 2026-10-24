@@ -8,16 +8,21 @@ import path from "pathe"
 
 import { WindowManager } from "~/manager/window"
 
+import { isTestRun } from "../env"
 import { getIconPath } from "../helper"
 import { initializeIpcServices } from "../ipc"
 import { saveMediaToEagle } from "../ipc/services/integration"
 import { checkAndCleanCodeCache, clearCacheCronJob } from "../lib/cleaner"
-import { getSessionTokenFromCookies, syncSessionToCliConfig } from "../lib/cli-session-sync"
+import {
+  getSessionTokenFromCookies,
+  isCliSyncEnabled,
+  syncSessionToCliConfig,
+} from "../lib/cli-session-sync"
 import { t } from "../lib/i18n"
 import { updateProxy } from "../lib/proxy"
 import { store } from "../lib/store"
 import { registerAppTray } from "../lib/tray"
-import { updateNotificationsToken } from "../lib/user"
+import { ensureNotificationsTokenSent, updateNotificationsToken } from "../lib/user"
 import { logger } from "../logger"
 import { registerAppMenu } from "../menu"
 import { registerUpdater } from "../updater"
@@ -52,6 +57,7 @@ class AppManagerStatic {
 
     // Sync the desktop session to the npm CLI after cookies are ready.
     setTimeout(async () => {
+      if (!isCliSyncEnabled()) return
       try {
         const token = await getSessionTokenFromCookies()
         if (token) {
@@ -64,6 +70,9 @@ class AppManagerStatic {
   }
 
   private registerProtocols() {
+    // The links of the installed app, e.g. sign-in callbacks, would open this test build
+    if (isTestRun) return
+
     const protocols = [LEGACY_APP_PROTOCOL, APP_PROTOCOL]
 
     for (const protocolName of protocols) {
@@ -122,6 +131,8 @@ class AppManagerStatic {
 
     instance.onReady(() => {
       logger.info("PushReceiver ready")
+      // At launch and after a reconnect, in case an earlier upload failed
+      void ensureNotificationsTokenSent()
     })
 
     instance.onCredentialsChanged(({ newCredentials }) => {

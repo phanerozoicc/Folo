@@ -1,3 +1,4 @@
+import { FeedViewType, UserRole } from "@follow/constants"
 import { useIsEntryStarred } from "@follow/store/collection/hooks"
 import { collectionSyncService } from "@follow/store/collection/store"
 import { useEntry } from "@follow/store/entry/hooks"
@@ -5,7 +6,7 @@ import { entrySyncServices } from "@follow/store/entry/store"
 import { useFeedById } from "@follow/store/feed/hooks"
 import { useSubscriptionById } from "@follow/store/subscription/hooks"
 import { translationSyncService } from "@follow/store/translation/store"
-import { useIsLoggedIn } from "@follow/store/user/hooks"
+import { useIsLoggedIn, useUserRole } from "@follow/store/user/hooks"
 import { setStringAsync } from "expo-clipboard"
 import { useAtom } from "jotai"
 import { useCallback, useEffect, useState } from "react"
@@ -30,10 +31,13 @@ import { hideIntelligenceGlowEffect, openLink } from "@/src/lib/native"
 import { useNavigation } from "@/src/lib/navigation/hooks"
 import { createLinkShareContent } from "@/src/lib/share"
 import { toast } from "@/src/lib/toast"
+import { showUpgradeRequiredDialog } from "@/src/modules/dialogs/UpgradeRequiredDialog"
 import { playEntryTts } from "@/src/modules/player/entry-tts"
+import { getSelectedView } from "@/src/modules/screen/atoms"
 import { ReadingScreen } from "@/src/modules/settings/routes/Reading"
 
 import { useEntryContentContext } from "./ctx"
+import { useEntryExternalUrl } from "./external-url"
 
 type ActionItem = {
   key: string
@@ -63,6 +67,7 @@ const HeaderRightActionsImpl = ({
   isHeaderTitleVisible,
 }: HeaderRightActionsProps) => {
   const { t } = useTranslation()
+  const { t: tSettings } = useTranslation("settings")
   const navigation = useNavigation()
   const labelColor = useColor("label")
   const isLoggedIn = useIsLoggedIn()
@@ -73,18 +78,23 @@ const HeaderRightActionsImpl = ({
     entryId,
     (entry) =>
       entry && {
-        url: entry.url,
         feedId: entry.feedId,
         title: entry.title,
         settings: entry.settings,
       },
   )
+  // Onboarding entries have no link outside the app, and relative links resolve first
+  const externalUrl = useEntryExternalUrl(entryId)
 
   const { showReadabilityAtom, showAITranslationAtom } = useEntryContentContext()
   const [showTranslation, setShowTranslation] = useAtom(showAITranslationAtom)
   const [showReadability, setShowReadability] = useAtom(showReadabilityAtom)
+  const translationSetting = useGeneralSettingKey("translation")
+  const userRole = useUserRole()
+  // Free plans don't include AI translation, so neither the setting nor an action translates
+  const isTranslationLocked = userRole === UserRole.Free || userRole === UserRole.Trial
   const showAITranslationSetting =
-    useGeneralSettingKey("translation") || !!entry?.settings?.translation
+    !isTranslationLocked && (translationSetting || !!entry?.settings?.translation)
   const translationMode = useGeneralSettingKey("translationMode")
   const showReadabilitySetting = !!entry?.settings?.readability
 
@@ -92,24 +102,38 @@ const HeaderRightActionsImpl = ({
   const subscription = useSubscriptionById(feed?.feedId as string)
 
   const handleToggleStar = () => {
-    if (!entry || !feed || !subscription) return
+    if (!entry) return
 
     isStarred
       ? collectionSyncService.unstarEntry({ entryId })
       : collectionSyncService.starEntry({
           entryId,
-          view: subscription.view,
+          // An entry read through a list, a preview or an unfollowed feed has no subscription,
+          // so it is starred in the view it was opened from
+          view: subscription?.view ?? getSelectedView() ?? FeedViewType.Articles,
         })
   }
 
   const handleShare = () => {
-    if (!entry?.title || !entry?.url) return
+    if (!externalUrl) return
     Share.share(
-      createLinkShareContent({ platform: Platform.OS, title: entry.title, url: entry.url }),
+      createLinkShareContent({
+        platform: Platform.OS,
+        // Social posts often have no title
+        title: entry?.title || t("operation.share_title.link"),
+        url: externalUrl,
+      }),
     )
   }
 
   const toggleAITranslation = () => {
+    if (isTranslationLocked) {
+      showUpgradeRequiredDialog({
+        title: tSettings("general.action.translation.label"),
+        message: tSettings("control.paid_badge.basic_or_higher"),
+      })
+      return
+    }
     translationSyncService.generateTranslation({
       entryId,
       language: getActionLanguage(),
@@ -126,14 +150,14 @@ const HeaderRightActionsImpl = ({
   }, [entryId, setShowReadability])
 
   const handleCopyLink = () => {
-    if (!entry?.url) return
-    setStringAsync(entry.url)
+    if (!externalUrl) return
+    setStringAsync(externalUrl)
     toast.success(t("operation.copy_which_success", { which: t("operation.copy.link") }))
   }
 
   const handleOpenInBrowser = () => {
-    if (!entry?.url) return
-    openLink(entry.url)
+    if (!externalUrl) return
+    openLink(externalUrl)
   }
 
   useEffect(() => {
@@ -143,7 +167,7 @@ const HeaderRightActionsImpl = ({
   // Define action items for reuse
   const actionItems = [
     isLoggedIn &&
-      subscription && {
+      !!entry && {
         key: "Star",
         title: isStarred ? t("operation.unstar") : t("operation.star"),
         icon: isStarred ? <StarCuteFiIcon /> : <StarCuteReIcon />,
@@ -172,7 +196,7 @@ const HeaderRightActionsImpl = ({
         icon: <Translate2CuteReIcon />,
         iconIOS: { name: "globe" },
         onPress: toggleAITranslation,
-        active: showTranslation,
+        active: showTranslation && !isTranslationLocked,
         isCheckbox: true,
         inMenu: true,
       },
@@ -189,21 +213,21 @@ const HeaderRightActionsImpl = ({
       },
       inMenu: true,
     },
-    {
+    !!externalUrl && {
       key: "Share",
       title: t("operation.share"),
       icon: <ShareForwardCuteReIcon />,
       iconIOS: { name: "square.and.arrow.up" },
       onPress: handleShare,
     },
-    {
+    !!externalUrl && {
       key: "CopyLink",
       title: t("operation.copy_which", { which: t("operation.copy.link") }),
       iconIOS: { name: "link" },
       onPress: handleCopyLink,
       inMenu: true,
     },
-    {
+    !!externalUrl && {
       key: "OpenInBrowser",
       title: t("entry_content.header.open_in_browser"),
       iconIOS: { name: "safari" },
@@ -233,6 +257,11 @@ const HeaderRightActionsImpl = ({
           opacity: interpolate(titleOpacityShareValue.value, [0, 1], [1, 0]),
         }))}
         className="absolute right-[32px] z-10 flex-row gap-2"
+        // Faded out once the title shows in the header, where Android would still let them be
+        // tapped and screen readers would still find them
+        pointerEvents={isHeaderTitleVisible ? "none" : "box-none"}
+        accessibilityElementsHidden={isHeaderTitleVisible}
+        importantForAccessibility={isHeaderTitleVisible ? "no-hide-descendants" : "auto"}
       >
         {actionItems
           .filter((item) => !item.inMenu)

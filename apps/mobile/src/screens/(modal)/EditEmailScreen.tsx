@@ -1,7 +1,7 @@
 import { useWhoami } from "@follow/store/user/hooks"
-import { userSyncService } from "@follow/store/user/store"
+import { userSyncService, UserUpdateError } from "@follow/store/user/store"
 import { useMutation } from "@tanstack/react-query"
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { View } from "react-native"
 
@@ -17,6 +17,9 @@ import {
   GroupedOutlineDescription,
   GroupedPlainButtonCell,
 } from "@/src/components/ui/grouped/GroupedList"
+import { useTouchOnTypingPause } from "@/src/hooks/useTouchOnTypingPause"
+import { isValidEmail } from "@/src/lib/email"
+import { getAuthErrorMessage } from "@/src/lib/error-parser"
 import { useNavigation } from "@/src/lib/navigation/hooks"
 import type { NavigationControllerView } from "@/src/lib/navigation/types"
 import { toast } from "@/src/lib/toast"
@@ -29,11 +32,12 @@ export const EditEmailScreen: NavigationControllerView = () => {
   const [email, setEmail] = useState(whoami?.email ?? "")
 
   const [isDirty, setIsDirty] = useState(false)
+  // Set once the field is left or typing pauses, so the hint does not interrupt typing
+  const [isEmailTouched, setIsEmailTouched] = useState(false)
   const isValidate = whoami?.emailVerified
 
-  const newEmailIsValid = useMemo(() => {
-    return email.match(/^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/)
-  }, [email])
+  const newEmailIsValid = isValidEmail(email)
+  useTouchOnTypingPause(isDirty ? email : "", !newEmailIsValid, setIsEmailTouched)
 
   const navigation = useNavigation()
   const { mutate: updateEmail, isPending } = useMutation({
@@ -41,10 +45,21 @@ export const EditEmailScreen: NavigationControllerView = () => {
       await userSyncService.updateEmail(email)
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : t("profile.email.update_failed"))
+      toast.error(
+        error instanceof UserUpdateError
+          ? getAuthErrorMessage(error)
+          : error instanceof Error
+            ? error.message
+            : t("profile.email.update_failed"),
+      )
     },
     onSuccess: () => {
-      toast.info(t("profile.email.changed_verification_sent"))
+      // A verified account approves the change from its current email first
+      toast.info(
+        isValidate
+          ? t("profile.email.change_approval_sent")
+          : t("profile.email.changed_verification_sent"),
+      )
       navigation.dismiss()
     },
   })
@@ -80,20 +95,31 @@ export const EditEmailScreen: NavigationControllerView = () => {
           >
             <PlainTextField
               autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              autoComplete="email"
+              textContentType="emailAddress"
               value={email}
               onChangeText={(text) => {
                 setEmail(text)
                 setIsDirty(true)
               }}
+              onBlur={() => setIsEmailTouched(true)}
               placeholder={t("profile.email.placeholder")}
               className="w-full flex-1 text-left text-secondary-label"
             />
           </GroupedInsetListCell>
         </GroupedInsetListCard>
+        {isDirty && isEmailTouched && !!email && !newEmailIsValid && (
+          <GroupedOutlineDescription
+            description={t("validation.invalid_email", { ns: "common" })}
+            isError
+          />
+        )}
         <GroupedOutlineDescription
           description={`${t("profile.email.verify_status", {
             status: isValidate ? t("profile.email.verified") : t("profile.email.unverified"),
-          })}\n\n${t("profile.email.change_note")}`}
+          })}\n\n${isValidate ? t("profile.email.change_note_verified") : t("profile.email.change_note")}`}
         />
 
         {/* Buttons */}
@@ -119,9 +145,11 @@ export const EditEmailScreen: NavigationControllerView = () => {
                   })
                   .catch((error) => {
                     toast.error(
-                      error instanceof Error
-                        ? error.message
-                        : t("profile.email.send_verification_failed"),
+                      error instanceof UserUpdateError
+                        ? getAuthErrorMessage(error)
+                        : error instanceof Error
+                          ? error.message
+                          : t("profile.email.send_verification_failed"),
                     )
                   })
                   .finally(() => {

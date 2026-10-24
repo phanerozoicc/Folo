@@ -16,6 +16,18 @@ vi.mock("expo-updates", () => ({
   },
 }))
 
+vi.mock("@/src/lib/proxy-env", () => ({
+  proxyEnv: { OTA_URL: "https://ota.folo.is" },
+}))
+
+vi.mock("@/src/lib/launch-link", () => ({
+  rememberHandledLaunchLink: vi.fn(async () => {}),
+}))
+
+vi.mock("../use-store-update-prompt", () => ({
+  useStoreUpdatePrompt: vi.fn(),
+}))
+
 vi.mock("react-native", () => ({
   InteractionManager: {
     runAfterInteractions: (callback: () => void) => {
