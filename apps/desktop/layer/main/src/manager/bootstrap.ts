@@ -16,6 +16,7 @@ import { isMacOS } from "../env"
 import { migrateAuthCookiesToNewApiDomain } from "../lib/auth-cookie-migration"
 import { dedupeManagedAuthCookies } from "../lib/auth-cookies"
 import { isDeepLink, openDeepLink, setDeepLinkHandler } from "../lib/deep-link"
+import { startLocalProxyFallback, stopLocalProxyFallback } from "../lib/local-proxy-fallback"
 import { handleUrlRouting } from "../lib/router"
 import { updateNotificationsToken } from "../lib/user"
 import { logger } from "../logger"
@@ -138,6 +139,8 @@ export class BootstrapManager {
         }
       })
 
+      startLocalProxyFallback()
+
       WindowManager.getMainWindowOrCreate()
 
       // Removing old renderer bundles can be slow, or fail on Windows when a file is in use, so it
@@ -160,6 +163,7 @@ export class BootstrapManager {
     })
 
     app.on("before-quit", async () => {
+      stopLocalProxyFallback()
       const window = WindowManager.getMainWindow()
       if (!window || window.isDestroyed()) return
       WindowManager.saveMainWindowState(window)
